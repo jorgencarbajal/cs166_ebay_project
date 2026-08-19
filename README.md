@@ -386,25 +386,6 @@ Reading the error precisely saves time. A `database does not exist` or `authenti
 
 ---
 
-## Project structure
-
-Files are split by what they **are**, not what they are about: Python you import, SQL you run, data you load, scripts you invoke.
-
-```
-src/              importable application code — see the module map above
-sql/
-  schema.sql      table definitions (instructor's, verbatim — never edited)
-  indexes.sql     our physical design work
-scripts/          run by hand — e.g. load_db.py
-data/             dataset provided by the instructor
-docs/
-  overview.md     guided tour of src/
-  architecture.md design decisions and their tradeoffs
-  issues.md       task breakdown — source of truth for what gets built
-main.py           entry point — hands control to src/menus/
-.env.example      committed template — copy to .env and fill in
-```
-
 Two separations we hold to deliberately:
 
 - **Connecting vs. initializing.** `src/db.py` only opens connections and is imported everywhere, so importing it must never be able to drop a table. Anything destructive lives in `scripts/`.
