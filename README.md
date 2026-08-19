@@ -6,6 +6,50 @@ CS166 Project — Phase 3. PostgreSQL backend with a Python terminal client.
 
 ---
 
+## Start here — the documentation
+
+Four documents, each with a distinct job. Read them in this order.
+
+| File | What it is |
+|---|---|
+| **[docs/overview.md](docs/overview.md)** | **Read this first.** A guided tour of `src/` — what every module is responsible for, what it may import, and how one user action travels from keystroke to database and back. Half an hour here will save you a day of reading files one by one. |
+| [docs/architecture.md](docs/architecture.md) | Why the system is shaped the way it is. Worth reading before you write anything nontrivial — especially §1, which explains four properties of the schema that reading `sql/schema.sql` will not make obvious, and each of which will bite you if you do not know about it. It is also where the final report's design and limitations sections are already half-drafted. |
+| [docs/issues.md](docs/issues.md) | The full task breakdown. **Source of truth for what gets built and in what order** — every GitHub issue came from here. Check it before starting anything, so two of us do not build the same feature twice. |
+| [docs/CS166-Project.pdf](docs/CS166-Project.pdf) | The instructor's specification. Every requirement traces back to §6. |
+
+This README covers setup and workflow only. It deliberately does not explain the code — that is `overview.md`'s job, and duplicating it here guarantees the two drift apart.
+
+### Every file explains itself
+
+Each module in `src/` opens with a docstring covering what it is for, which tables it touches, which modules it calls, and which call it. If you are already looking at a file, that paragraph is faster than any document. If you are trying to work out which file to open, start with `overview.md`.
+
+```
+src/
+  db.py            connections only — reads .env, hands out psycopg connections
+  errors.py        the exception vocabulary every module raises from
+  session.py       who is logged in, plus require_role()
+  ids.py           primary key generation — nothing in the schema auto-increments
+  ui.py            the only module that imports rich
+
+  auth.py          register and log in
+  users.py         profiles, admin user management, role changes
+  items.py         listings
+  auctions.py      browse, search, detail, ending an auction
+  bids.py          placing bids and bid history
+  payments.py      paying for a won auction
+  shipments.py     delivery after payment
+
+  menus/
+    __init__.py    login gate, then dispatch on role
+    buyer.py
+    seller.py
+    admin.py
+```
+
+Only `db.py` is implemented today. The rest hold their docstring and nothing else — the map exists so three people can build against it in parallel without colliding.
+
+---
+
 ## Part 1 — One-time server setup
 
 Do this section once. After it is done, see [Part 2](#part-2--every-session) for the short daily routine.
@@ -206,13 +250,78 @@ You do **not** need to stop the database when you are finished. Leaving it runni
 
 Jorge edits on his own machine and runs on the server; you may do the same or edit directly over SSH. Either way, **git is how code moves** — never copy-paste files onto the server. Pasted files silently diverge from what is committed, and you will eventually spend an hour debugging code that isn't the code you think you are running.
 
-The loop is two commands:
+**Your server clone is yours alone.** We each have our own home directory, our own clone, and our own Postgres instance. Nothing is shared, so think of the server as simply a second machine of your own that happens to be the only one that can run the code.
+
+Pick one of the two workflows below. They produce identical history — the difference is only how many machines your code has to travel across before you can run it.
+
+---
+
+### Workflow A — editing on the server (simpler)
+
+You SSH in, edit the files in place (`vim`, `nano`, or VS Code Remote-SSH), and run them right there. This is plain, ordinary git. There is nothing extra to learn.
 
 ```bash
-# on your machine
+# on the server, in ~/cs166_ebay_project
+git checkout main
+git pull                              # start from current main, not something stale
+git checkout -b feat/thing
+
+# ...edit files, then run them...
+.venv/bin/python main.py
+
+git commit -am "implement thing"
+git push -u origin feat/thing
+```
+
+Then open the pull request on GitHub, get a review, merge, and come back to a clean base:
+
+```bash
+git checkout main
+git pull
+```
+
+**Editing and running happen in the same place, so you never push just to test.** You push when the work is actually done.
+
+---
+
+### Workflow B — editing locally, running on the server (what Jorge does)
+
+Jorge edits locally. The catch is that **his machine has no database, so he cannot run anything locally** — the code has to reach the server before it can be tested, and git is the only acceptable way to move it.
+
+This adds two requirements that Workflow A does not have:
+
+1. **You must push before you can test.** Expect throwaway `wip` commits; that is normal and they get squashed later.
+2. **The first time you test a new branch on the server you need `git fetch` and `git checkout`, not `git pull`.** `git pull` only updates the branch you are currently standing on. If your server clone is sitting on `main` and you pull, git reports "Already up to date" and your new code is nowhere to be seen — because it is on a branch you have not switched to yet.
+
+Start the branch on your own machine:
+
+```bash
+# your machine
+git checkout main
+git pull
+git checkout -b feat/thing
+
+# ...edit files...
+git commit -am "wip"
+git push -u origin feat/thing
+```
+
+Pick the branch up in your server clone — this pair of commands is needed **once per branch**:
+
+```bash
+# your server clone
+git fetch                    # download the new branch from GitHub
+git checkout feat/thing      # switch onto it — this is the step people forget
+.venv/bin/python main.py     # now you can actually test
+```
+
+From here on, every round trip is a two-command loop, because both clones are already on the same branch:
+
+```bash
+# your machine
 git commit -am "wip" && git push
 
-# on the server
+# your server clone
 git pull && .venv/bin/python main.py
 ```
 
@@ -222,7 +331,37 @@ Worth adding to your server `~/.bashrc`:
 alias rerun='git pull && .venv/bin/python main.py'
 ```
 
-Branch rules: feature branches, pull requests into `main`, no direct pushes to `main`. Squash noisy `wip` commits with `git rebase -i` before opening the PR.
+Once it works on the server, open the pull request, get a review, and merge. Then return **both** clones to a clean base — remember you have two working copies to keep straight, which is the price of this workflow:
+
+```bash
+git checkout main
+git pull
+```
+
+---
+
+### Cleaning up
+
+Optional, but keeps `git branch -a` readable. GitHub offers a **Delete branch** button after merging, which removes the remote copy; the local ones are yours to remove:
+
+```bash
+git branch -d feat/thing     # in each clone you used — one for Workflow A, two for Workflow B
+git fetch --prune            # drop remote-tracking refs for branches that are gone
+```
+
+### Reading `git branch -a`
+
+```
+* main
+  remotes/origin/HEAD -> origin/main
+  remotes/origin/main
+```
+
+`origin/HEAD` is not a branch. It is a pointer recording which branch the remote treats as its default, which is how git knows what you mean if you write `origin` without naming a branch. Real branches are the lines without an arrow.
+
+### Branch rules
+
+Feature branches, pull requests into `main`, no direct pushes to `main`. Squash noisy `wip` commits with `git rebase -i` before opening the PR.
 
 ---
 
@@ -252,13 +391,17 @@ Reading the error precisely saves time. A `database does not exist` or `authenti
 Files are split by what they **are**, not what they are about: Python you import, SQL you run, data you load, scripts you invoke.
 
 ```
-src/              importable application code — db.py is the connection layer
+src/              importable application code — see the module map above
 sql/
-  schema.sql      table definitions (instructor's, verbatim)
+  schema.sql      table definitions (instructor's, verbatim — never edited)
   indexes.sql     our physical design work
 scripts/          run by hand — e.g. load_db.py
 data/             dataset provided by the instructor
-docs/             report and design notes
+docs/
+  overview.md     guided tour of src/
+  architecture.md design decisions and their tradeoffs
+  issues.md       task breakdown — source of truth for what gets built
+main.py           entry point — hands control to src/menus/
 .env.example      committed template — copy to .env and fill in
 ```
 
