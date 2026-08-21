@@ -35,7 +35,7 @@ Write `scripts/load_db.py`. It is run by hand, never imported, and it is the onl
 
 ---
 
-## 2. Shared foundation: session, errors, IDs, UI helpers, auth, and menu dispatch
+## 2. Shared foundation: session, errors, UI helpers, auth, and menu dispatch
 
 **Labels:** `foundation`, `client`, `blocker`
 
@@ -66,14 +66,25 @@ Holds who is logged in for the life of the program. A small dataclass with `logi
 
 Role checks belong here and in the feature modules — **not only in the menus**. Hiding a menu option is not access control.
 
-### `src/ids.py`
+### Primary keys — settled, no module needed
 
-Nothing in the schema auto-increments. Every primary key is a plain `INT`, so the application generates them for `item`, `auction`, `bid`, `payment`, and `shipment`.
+**Decided 2026-08-20: we use sequences.** `sql/extensions.sql` is written and committed. There is **no `src/ids.py`** — delete it if it is still lying around.
 
-- [ ] `next_id(conn, table, column)` returning `COALESCE(MAX(col), 0) + 1`
-- [ ] Document the race clearly: two concurrent inserts can compute the same id. It must be called **inside the same transaction** as the insert it feeds, and callers must be prepared for a unique-violation retry.
+Nothing in the instructor's schema auto-increments, so the choice was `MAX(id) + 1` in the application versus adding our own sequences. `MAX(id) + 1` has to run inside the same transaction as the insert it feeds, two transactions can still read the same `MAX` and collide, and every insert would need retry logic wrapped around it. A sequence hands out a unique number with no locking and no retries.
 
-Worth 15 minutes of discussion before writing it: the alternative is adding our own sequences in `sql/indexes.sql` and calling `nextval()`, which removes the race entirely. That is a schema extension, which §2.3 explicitly permits if documented — and §3 offers extra credit for meaningful schema extensions. `MAX+1` is fine for a single-user demo; sequences are the defensible engineering answer. Pick one, write down why, and reuse that paragraph in the report.
+`sql/extensions.sql` creates one sequence per numeric-PK table (`item`, `auction`, `bid`, `payment`, `shipment`) and wires each into its column as a `DEFAULT nextval(...)`, which is what `SERIAL` does under the hood. `users` needs none — its PK is the `login` string.
+
+**What this means for every feature module:** omit the id column from the `INSERT` and use `RETURNING`.
+
+```sql
+INSERT INTO bid (auction_id, buyer_login, bid_amount) VALUES (%s, %s, %s) RETURNING bid_id
+```
+
+- [ ] Run `sql/extensions.sql` right after `sql/schema.sql` in `scripts/load_db.py` (issue #1)
+- [ ] Every insert in `items.py`, `auctions.py`, `bids.py`, `payments.py`, `shipments.py` uses the `RETURNING` shape above
+- [ ] `sql/seed.sql` (issue #1) must either omit the id columns too, or call `setval()` on each sequence at the end — otherwise the first row created through the app collides with seeded ids
+
+§2.3 permits documented schema extensions and §3 offers extra credit for meaningful ones. The header comment in `sql/extensions.sql` is written to be lifted straight into the report.
 
 ### `src/ui.py`
 
@@ -199,7 +210,7 @@ The most constraint-heavy feature in the project, and the one most likely to be 
 - [ ] Wrap the whole thing in **one transaction**: read the auction, validate, `INSERT INTO bid`, `UPDATE auction SET current_highest_bid`
 - [ ] Lock the auction row with `SELECT ... FOR UPDATE` so two bids cannot both pass validation against a stale high bid
 - [ ] Raise `BidTooLow(current)`, `SelfBid`, or `AuctionClosed` as appropriate
-- [ ] Get `bid_id` from `ids.next_id` inside the same transaction
+- [ ] Let the `bid_id_seq` sequence supply the id — omit `bid_id` from the `INSERT` and add `RETURNING bid_id` (see `sql/extensions.sql`)
 - [ ] Menu shows the current high bid before prompting, and reports the new bid id on success
 
 **Note:** `current_highest_bid` is denormalized — it duplicates information derivable from `bid`. Keeping the two consistent is the entire point of the transaction. Write a paragraph about this for the report; it is exactly the kind of tradeoff the documentation grade rewards.
@@ -435,7 +446,7 @@ Worth 10%. Start it early — everyone who leaves it to the last day loses point
 
 - [ ] Description of the implementation and architecture
 - [ ] Physical design section: indexes chosen, with before/after measurements from #17
-- [ ] Documented assumptions and limitations — plain-text passwords, the role-change constraint from #14, the `MAX(id)+1` race from #2, no auction end times in the schema
+- [ ] Documented assumptions and limitations — plain-text passwords, the role-change constraint from #14, the sequences we added in `sql/extensions.sql` as a documented schema extension, no auction end times in the schema
 - [ ] Any dataset modifications, which §2.3 requires be reported
 - [ ] **Per-member task and contribution breakdown — §4 requires this explicitly**
 - [ ] Screenshots of the client in action
