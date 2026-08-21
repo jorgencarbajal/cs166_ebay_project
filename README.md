@@ -67,14 +67,21 @@ Current as of 2026-08-21. See [Important notes](#important-notes) at the bottom 
 | `src/errors.py` | The 15 exception classes every feature module raises from. |
 | `src/ui.py` | The full terminal helper set — messages, headings, tables, pagination, menus, prompts, confirmations. The only module that imports `rich`. |
 | `src/auth.py` | `Session`, `require_role()`, `register()`, `login()`. New accounts are always Buyer, straight from the schema default. |
+| `src/menus/__init__.py` | The login gate, the role dispatch, and the one generic menu loop the three role files run on. |
+| `src/menus/{buyer,seller,admin}.py` | Menu structure complete — every action is listed and reachable. The action *bodies* are placeholders naming the issue that will replace them. |
+| `main.py` | Checks the database is reachable, then hands off to `menus.run()`. |
 | `scripts/load_db.py` | Builds the database from the `sql/` files in one transaction. See [1.10](#110--build-the-database). |
 | `scripts/smoke.py` | Checks the code against a live database — 13 checks today, one section per module as they land. See [1.11](#111--verify-everything-works). |
 | `scripts/ui_demo.py` | Previews the whole interface with fake data and no database — `--all` runs every section, `--static` skips the interactive ones. |
 | `sql/schema.sql`, `sql/extensions.sql` | Both loaded on the server. Six tables and five sequences exist; the tables are still empty. |
 
-**Not started.** These files hold a docstring and nothing else: `users.py`, `items.py`, `auctions.py`, `bids.py`, `payments.py`, `shipments.py`, and all four files under `menus/`. `main.py` is still a stub. `sql/seed.sql` and `sql/indexes.sql` are empty on purpose — both are written last.
+**The application runs.** `.venv/bin/python main.py` gets you: register → log in → your role's menu → log out → quit. Every action is on the menu; the ones whose feature module isn't written yet say so and name their issue.
 
-**Next up:** `src/menus/__init__.py` — the login gate and role dispatch. That closes issue #2 and unblocks everyone, since no feature can be reached until there is a menu to reach it from.
+**Not started.** These files hold a docstring and nothing else: `users.py`, `items.py`, `auctions.py`, `bids.py`, `payments.py`, `shipments.py`. `sql/seed.sql` and `sql/indexes.sql` are empty on purpose — both are written last.
+
+**Next up:** the features themselves, issues #3 onward. Each one is a vertical slice — a feature module plus the menu action that calls it — so three people can take three slices without touching the same file.
+
+**How to add a feature.** Write the function in its feature module, then replace the placeholder body in `menus/buyer.py`, `seller.py`, or `admin.py`. You never touch `menus/__init__.py`: it owns the loop, the dispatch, and the `except AppError`, and the role files are nothing but a `TITLE` and a list of `(key, label, function)`.
 
 The map above exists so three people can build against it in parallel without colliding. Claim your work in [docs/issues.md](docs/issues.md) before you start on it.
 
@@ -356,7 +363,7 @@ git pull                              # start from current main, not something s
 git checkout -b feat/thing
 
 # ...edit files, then run them...
-.venv/bin/python main.py # This is obviously when the main is wired up...
+.venv/bin/python main.py              # the application itself
 
 git commit -am "implement thing"
 git push -u origin feat/thing
