@@ -110,24 +110,13 @@ def demo_messages():
     ui.info("Showing 10 of 25 auctions.")
 
     ui.blank()
-    ui.info("Current prefixes are plain ASCII, chosen so they cannot break. The alternative is symbols, which look better wherever they work -- but they do not work everywhere.")
-    ui.blank()
 
-    # Printed straight through the console rather than through ui.success, because the point is to compare against what ui.success currently does.
-    ui.console.print("[bold green]OK[/bold green]  Bid placed. Your bid id is 105.")
-    ui.console.print("[bold red]!![/bold red]  Your bid of $10.00 must be greater.")
-    ui.console.print("[bold yellow]??[/bold yellow]  This auction has no bids.")
-    ui.blank()
-
-    if _can_encode("✓✗⚠"):
-        ui.console.print("[bold green]✓[/bold green]   Bid placed. Your bid id is 105.")
-        ui.console.print("[bold red]✗[/bold red]   Your bid of $10.00 must be greater.")
-        ui.console.print("[bold yellow]⚠[/bold yellow]   This auction has no bids.")
-        ui.blank()
-        ui.success("This terminal renders the symbols. If the server does too, they are worth switching to.")
+    # ui.py picks its prefixes at import time based on what the terminal can encode, so this section reports which set is in play rather than offering a choice.
+    if _can_encode("✓✗⚠·"):
+        ui.success(f"Symbols are active. This terminal encodes {sys.stdout.encoding!r}, which handles them.")
     else:
-        ui.warn(f"This terminal cannot encode the symbols -- its output encoding is {sys.stdout.encoding!r}, which has no room for them.")
-        ui.info("That is exactly why ui.py ships with ASCII. Run this on the server before deciding; a proper UTF-8 SSH session normally handles them fine.")
+        ui.warn(f"ASCII fallback is active. This terminal encodes {sys.stdout.encoding!r}, which cannot represent the symbols at all.")
+        ui.info("Nothing is broken -- ui.py detected it at import and swapped in OK / !! / ?? / -- instead. The server renders the symbols, so it looks better there.")
 
 
 def _render_with_box(box_style, label):
@@ -171,11 +160,11 @@ def demo_tables():
 
     ui.blank()
     ui.heading("Border styles to choose from")
-    ui.info("Same four rows, six different borders. Pick one and it becomes the look of every table in the project.")
+    ui.info("Same four rows, six different borders. ROUNDED is the one in use -- the others are here in case it looks wrong on a different terminal.")
     ui.blank()
 
-    _render_with_box(box.HEAVY_HEAD, "HEAVY_HEAD  (what ui.py uses now)")
-    _render_with_box(box.ROUNDED, "ROUNDED")
+    _render_with_box(box.HEAVY_HEAD, "HEAVY_HEAD")
+    _render_with_box(box.ROUNDED, "ROUNDED  (what ui.py uses now)")
     _render_with_box(box.SIMPLE, "SIMPLE")
     _render_with_box(box.SIMPLE_HEAD, "SIMPLE_HEAD")
     _render_with_box(box.MINIMAL, "MINIMAL")

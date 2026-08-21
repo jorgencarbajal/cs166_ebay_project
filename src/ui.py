@@ -8,7 +8,9 @@ Money is NUMERIC(10,2) in the schema, so the prompts return Decimal and never fl
 
 # Decimal is Python's exact decimal arithmetic. Money must never be float: 0.1 + 0.2 is 0.30000000000000004 in float, which is how you end up a cent off. InvalidOperation is what Decimal("abc") raises.
 from decimal import Decimal, InvalidOperation
+import sys
 
+from rich import box
 from rich.console import Console
 from rich.table import Table
 from rich.prompt import Prompt, Confirm
@@ -18,26 +20,55 @@ from rich.prompt import Prompt, Confirm
 console = Console()
 
 
+# The border style every table in the project uses. Changing this one name restyles all of them.
+BOX = box.ROUNDED
+
+
 # MESSAGES ---------------------------------------------------------------------------------------
 #
 # Four one-liners so the rest of the app never picks its own colours. Change the look here and the whole interface changes.
 # The [green]...[/green] syntax is rich's markup, its own inline styling language.
 
 
+def _terminal_handles(text):
+    """
+    Can this terminal display these characters?
+
+    The server runs a UTF-8 session and shows the symbols properly. A Windows console is often cp1252, which cannot encode them at all -- it raises UnicodeEncodeError rather than printing something ugly. Since scripts/ui_demo.py is meant to run on a laptop too, we ask first and fall back rather than crashing.
+
+    Asked in advance rather than by catching the failure, because rich buffers its output: an unencodable character blows up on some later print, not the one that queued it, so a try/except around the print does not catch it where you would expect.
+    """
+    try:
+        # sys.stdout.encoding is the codec the terminal is using. Encoding the text against it is the direct test.
+        text.encode(sys.stdout.encoding or "ascii")
+        return True
+    except (UnicodeEncodeError, LookupError):
+        return False
+
+
+# Decided once at import time, not per message, so the whole session looks consistent even if something odd happens to stdout later.
+if _terminal_handles("✓✗⚠·"):
+    # Each symbol is one column wide, so three trailing spaces line the text up at column 4.
+    _OK, _BAD, _WARN, _INFO = "✓  ", "✗  ", "⚠  ", "·  "
+else:
+    # Two characters plus one space, also column 4, so messages align identically either way.
+    _OK, _BAD, _WARN, _INFO = "OK ", "!! ", "?? ", "-- "
+
+
 def success(message):
-    console.print(f"[bold green]OK[/bold green]  {message}")
+    console.print(f"[bold green]{_OK}[/bold green] {message}")
 
 
 def error(message):
-    console.print(f"[bold red]!![/bold red]  {message}")
+    console.print(f"[bold red]{_BAD}[/bold red] {message}")
 
 
 def warn(message):
-    console.print(f"[bold yellow]??[/bold yellow]  {message}")
+    console.print(f"[bold yellow]{_WARN}[/bold yellow] {message}")
 
 
 def info(message):
-    console.print(f"[dim]--[/dim]  {message}")
+    console.print(f"[dim]{_INFO}[/dim] {message}")
 
 
 def blank():
@@ -108,7 +139,7 @@ def table(rows, columns, title=None):
 
     pairs = _normalize_columns(columns)
 
-    grid = Table(title=title, header_style="bold cyan", title_style="bold")
+    grid = Table(title=title, box=BOX, header_style="bold cyan", title_style="bold")
 
     for _key, header in pairs:
         grid.add_column(header)
