@@ -27,11 +27,9 @@ Each module in `src/` opens with a docstring covering what it is for, which tabl
 src/
   db.py            connections only — reads .env, hands out psycopg connections
   errors.py        the exception vocabulary every module raises from
-  session.py       who is logged in, plus require_role()
-  ids.py           primary key generation — nothing in the schema auto-increments
   ui.py            the only module that imports rich
 
-  auth.py          register and log in
+  auth.py          register, log in, the Session object, and require_role()
   users.py         profiles, admin user management, role changes
   items.py         listings
   auctions.py      browse, search, detail, ending an auction
@@ -44,9 +42,24 @@ src/
     buyer.py
     seller.py
     admin.py
+
+sql/
+  schema.sql       the instructor's schema, verbatim — never edited
+  extensions.sql   ours: sequences, so the ids generate themselves
+  seed.sql         ours: sample data (written last, currently empty)
+  indexes.sql      ours: tuning indexes (written last, currently empty)
+
+scripts/
+  load_db.py       run by hand — builds the database from the files above
 ```
 
-Only `db.py` is implemented today. The rest hold their docstring and nothing else — the map exists so three people can build against it in parallel without colliding.
+`db.py` and `scripts/load_db.py` are implemented today. The rest of `src/` holds a docstring and nothing else — the map exists so three people can build against it in parallel without colliding.
+
+**On primary keys:** nothing in the instructor's schema auto-increments, so `sql/extensions.sql` adds one sequence per numeric-PK table and wires it in as a column `DEFAULT`. Practical upshot for anything you write: **omit the id from your `INSERT` and use `RETURNING`.**
+
+```sql
+INSERT INTO bid (auction_id, buyer_login, bid_amount) VALUES (%s, %s, %s) RETURNING bid_id
+```
 
 ---
 
@@ -228,6 +241,33 @@ Success looks like:
 ```
 
 If it fails, see [Troubleshooting](#troubleshooting).
+
+### 1.10 — Build the database
+
+Your database exists but has no tables in it yet. Create them:
+
+```bash
+.venv/bin/python scripts/load_db.py
+```
+
+It prints the database it is about to target, lists the files it will run, and asks you to type `yes` before doing anything. Two other flags are available:
+
+```bash
+.venv/bin/python scripts/load_db.py --dry-run   # show the plan, touch nothing
+.venv/bin/python scripts/load_db.py --yes       # skip the prompt
+```
+
+Confirm it worked:
+
+```bash
+cs166_psql -d <your-netid>_DB -c '\dt'
+```
+
+You should see six tables — `users`, `item`, `auction`, `bid`, `payment`, `shipment`.
+
+**Read this before you run it a second time.** `scripts/load_db.py` is the only destructive file in the project: `sql/schema.sql` opens with six `DROP TABLE ... CASCADE` statements, so re-running it throws away every row you have. That is the point — it is how you get back to a clean database after testing corrupts your data — but it is not something to run casually. It only ever touches those six tables; anything else in your database is left alone.
+
+**Why it is a script and not part of the app:** `src/db.py` is imported by everything and only ever opens connections, so no stray import can drop a table. Everything destructive lives in `scripts/`, which is only ever run by hand.
 
 ---
 
@@ -424,7 +464,9 @@ Check syntax against the **PostgreSQL 10** documentation before proposing index 
 
 ## Open questions
 
-- What format is the instructor's dataset, and how large? Size determines whether our indexing work shows measurable improvement, and whether the files belong in git or should be gitignored with download instructions.
+None blocking right now.
+
+**Resolved 2026-08-20:** we generate our own dataset rather than waiting on one from the instructor. It lives in `sql/seed.sql` and is deliberately being written **last**, once the features are built and we know what shape the data needs to be. It needs enough rows for the indexing work in issue #17 to show measurable improvement, and it will use predictable logins (`buyer1`, `seller1`, `admin1`) so nobody has to grep generated rows mid-demo. §2.3 requires dataset choices be reported, so this paragraph goes in the report.
 
 ---
 

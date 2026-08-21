@@ -11,6 +11,7 @@ Copy each block into a GitHub issue. Delete this file once the board is populate
 ## 1. Load the schema into each developer's database
 
 **Labels:** `foundation`, `sql`, `blocker`
+**Status: DONE (2026-08-20)** — `scripts/load_db.py` is written, verified on the server, and documented in README §1.10. It runs `schema.sql` -> `extensions.sql` -> `seed.sql` -> `indexes.sql`, skipping any that are empty, all inside one transaction. Flags: `--yes` skips the prompt, `--dry-run` shows the plan without connecting.
 
 The instructor's schema is committed at `sql/schema.sql`, but nothing runs it yet. Each of us has our own Postgres instance on the school server, so each of us needs to be able to create the tables — and recreate them from scratch after we inevitably corrupt our data while testing.
 
@@ -29,13 +30,13 @@ Write `scripts/load_db.py`. It is run by hand, never imported, and it is the onl
 - The schema file is read from disk and never embedded in a Python string. If the server instance is lost, `sql/schema.sql` is what rebuilds it.
 - Run the whole file in one transaction so a syntax error partway through leaves nothing half-created.
 
-**Open question:** whether the instructor is providing a dataset. Jorge is confirming. If we generate our own, that becomes its own issue — the tuning work needs enough rows for index effects to be measurable, so think tens of thousands of bids, not twenty.
+**Resolved 2026-08-20:** we generate our own dataset. It lives in `sql/seed.sql` and is being written **last**, once the features exist and we know what shape the data needs to be. Requirements when we get there: enough rows for the tuning work in #17 to show measurable improvement (tens of thousands of bids, not twenty), and predictable logins — `buyer1`, `seller1`, `admin1` — so nobody has to grep generated rows during the demo. §2.3 requires dataset choices be reported.
 
 **Done when:** any of us can run one command on the server and get a complete, empty (or seeded) database.
 
 ---
 
-## 2. Shared foundation: session, errors, UI helpers, auth, and menu dispatch
+## 2. Shared foundation: errors, UI helpers, auth, session, and menu dispatch
 
 **Labels:** `foundation`, `client`, `blocker`
 
@@ -43,28 +44,33 @@ Every feature imports this, so it lands before the three of us split up. It is o
 
 The architecture it establishes: **feature modules take a connection and arguments, return data or raise, and never print. Menu modules catch and render.** Keeping business logic free of `print` is what lets us restyle the entire interface in one place later, which is where the +10% usability extra credit lives.
 
-### `src/errors.py`
+### `src/errors.py` — DONE (2026-08-21)
 
-One exception class per business rule the app enforces, all in one file so a menu can `except BidTooLow` without importing five modules. Each carries the data the menu needs to write a useful message.
+One exception class per business rule, all in one file so a menu can `except BidTooLow` without importing five modules. Each stores its data as attributes *and* builds a finished sentence, so `str(e)` is always safe to print.
 
-- [ ] `AppError` — base class, everything else inherits from it
-- [ ] `NotAuthorized` — role does not permit this action
-- [ ] `BidTooLow(current_bid)` — carries the current high bid so the menu can say what to beat
-- [ ] `SelfBid` — a seller bidding on their own auction
-- [ ] `AuctionClosed`
-- [ ] `AlreadyPaid`, `NotWinner`, `PaymentIncomplete` — payment and shipment guards
-- [ ] `LoginTaken`, `BadCredentials`
+Fifteen classes shipped:
 
-Menus should be able to `except AppError` as a catch-all and show `str(e)`, so give each one a sensible message.
+- [x] `AppError` — base class, everything else inherits from it. A menu catches this as a blanket "the user did something the rules forbid"
+- [x] `LoginTaken(login)`, `BadCredentials()` — registration and login. `BadCredentials` is deliberately vague; "no such user" would leak which logins exist
+- [x] `NotAuthorized(action, required_role=None)` — with a role it is a role problem ("Only Sellers can create a listing"), without one it is an ownership problem ("You are not allowed to edit that listing")
+- [x] `NotFound(what, key)` — one generic class for every failed lookup instead of five near-identical ones
+- [x] `BidTooLow(amount, minimum)` — `minimum` is whichever is higher, the current high bid or the item's starting price, so a fresh auction is handled by the same check
+- [x] `SelfBid()`, `AuctionClosed(auction_id)`
+- [x] `AuctionHasBids(item_id)` — backs #9's refusal to change `starting_price` mid-auction
+- [x] `NotWinner`, `AlreadyPaid`, `PaymentIncomplete(auction_id, status=None)` — payment and shipment guards
+- [x] `RoleChangeBlocked(login, current_role, new_role, reason)` — the strict policy from #14. Its docstring is written to drop straight into the report
+- [x] `ItemInUse(item_id, auction_id)` — the strict policy from #15
 
-### `src/session.py`
+**The pattern for every feature module:** catch the low-level psycopg exception, raise ours instead. A `UniqueViolation` about constraint `users_pkey` becomes `LoginTaken('jorge')`. Genuine bugs deliberately do **not** inherit from `AppError`, so they sail past every handler and produce a real traceback.
 
-Holds who is logged in for the life of the program. A small dataclass with `login` and `role` is enough — no global mutable state, pass the session object down into the menus.
+### Session — folded into `src/auth.py`, no separate module
 
-- [ ] `Session` dataclass: `login: str`, `role: str`
-- [ ] Helpers such as `require_role(session, "Admin")` that raise `NotAuthorized`, so permission checks are one line and consistent everywhere
+**Decided 2026-08-20.** There is no `src/session.py`. A five-line dataclass and one helper did not justify a file of their own, and `auth.py` is the only thing that ever constructs a `Session`.
 
-Role checks belong here and in the feature modules — **not only in the menus**. Hiding a menu option is not access control.
+- [ ] `Session` dataclass in `auth.py`: `login: str`, `role: str`. No global mutable state — pass the object down into the menus
+- [ ] `require_role(session, "Admin")` raising `NotAuthorized`, so permission checks are one line everywhere
+
+Role checks belong in the feature modules too — **not only in the menus**. Hiding a menu option is not access control.
 
 ### Primary keys — settled, no module needed
 
@@ -95,8 +101,11 @@ All `rich` usage lives here. No other module imports `rich`.
 - [ ] `table(rows, columns, title)` — takes the `dict_row` dicts that `db.py` already returns and renders a `rich.table.Table`
 - [ ] `prompt(label)`, `prompt_int(label)`, `prompt_decimal(label)`, `prompt_password(label)`, `confirm(label)` — all re-prompting on invalid input rather than crashing
 - [ ] `menu(title, options)` — prints a numbered list, returns the chosen key, rejects invalid choices
+- [ ] `page(rows, columns, title)` — shows one screenful and prompts `[n]ext / [b]ack / [q]uit`
 
 Money is `NUMERIC(10,2)` in the schema, so use `decimal.Decimal` and never `float`. Do the conversion here, once.
+
+**On `page()`:** a terminal cannot show a thousand rows, and a bare `LIMIT 50` is just scrollback. Built once here, it is reused by browse (#3), search (#4), the admin user list (#13), and the admin reports (#16) — so four features get pagination for the price of one, and it is a visible usability win for the +10% extra credit.
 
 ### `src/auth.py`
 
@@ -105,7 +114,7 @@ Money is `NUMERIC(10,2)` in the schema, so use `decimal.Decimal` and never `floa
 
 Per §6.1 new accounts are always `Buyer`; the schema already defaults it. Do not accept a role parameter here — only an Admin can change a role, and that is a separate feature.
 
-Passwords are stored as plain text to match the schema's `VARCHAR(100)`. Note that as a documented limitation in the report rather than quietly hashing, since the provided dataset (if any) will contain plain text.
+Passwords are stored as plain text to match the schema's `VARCHAR(100)`. Note that as a documented limitation in the report rather than quietly hashing — our own `seed.sql` uses plain text too, so hashing here would lock us out of every seeded account.
 
 ### `src/menus/__init__.py`
 
