@@ -53,13 +53,26 @@ scripts/
   load_db.py       run by hand — builds the database from the files above
 ```
 
-`db.py` and `scripts/load_db.py` are implemented today. The rest of `src/` holds a docstring and nothing else — the map exists so three people can build against it in parallel without colliding.
+## Project status
 
-**On primary keys:** nothing in the instructor's schema auto-increments, so `sql/extensions.sql` adds one sequence per numeric-PK table and wires it in as a column `DEFAULT`. Practical upshot for anything you write: **omit the id from your `INSERT` and use `RETURNING`.**
+Current as of 2026-08-21. See [Important notes](#important-notes) at the bottom for the two decisions that affect how you write code.
 
-```sql
-INSERT INTO bid (auction_id, buyer_login, bid_amount) VALUES (%s, %s, %s) RETURNING bid_id
-```
+**Built, tested, and on `main`:**
+
+| File | State |
+|---|---|
+| `src/db.py` | Connections only. Reads `.env`, hands out psycopg connections. |
+| `src/errors.py` | The 15 exception classes every feature module raises from. |
+| `src/ui.py` | The full terminal helper set — messages, headings, tables, pagination, menus, prompts, confirmations. The only module that imports `rich`. |
+| `scripts/load_db.py` | Builds the database from the `sql/` files in one transaction. See [1.10](#110--build-the-database). |
+| `scripts/ui_demo.py` | Previews the whole interface with fake data and no database — `--all` runs every section, `--static` skips the interactive ones. |
+| `sql/schema.sql`, `sql/extensions.sql` | Both loaded on the server. Six tables and five sequences exist; the tables are still empty. |
+
+**Not started.** These files hold a docstring and nothing else: `auth.py`, `users.py`, `items.py`, `auctions.py`, `bids.py`, `payments.py`, `shipments.py`, and all four files under `menus/`. `main.py` is still a stub. `sql/seed.sql` and `sql/indexes.sql` are empty on purpose — both are written last.
+
+**Next up:** `src/auth.py`, then `src/menus/__init__.py`. Those two close issue #2 and unblock everyone, since no feature can be reached until there is a login and a menu to reach it from.
+
+The map above exists so three people can build against it in parallel without colliding. Claim your work in [docs/issues.md](docs/issues.md) before you start on it.
 
 ---
 
@@ -282,8 +295,6 @@ git pull
 
 That's it. There is no tunnel to open and nothing to leave running in a second terminal.
 
-You do **not** need to stop the database when you are finished. Leaving it running costs nothing and saves you a step next time.
-
 ---
 
 ## Development workflow
@@ -292,11 +303,9 @@ Jorge edits on his own machine and runs on the server; you may do the same or ed
 
 **Your server clone is yours alone.** We each have our own home directory, our own clone, and our own Postgres instance. Nothing is shared, so think of the server as simply a second machine of your own that happens to be the only one that can run the code.
 
-Pick one of the two workflows below. They produce identical history — the difference is only how many machines your code has to travel across before you can run it.
-
 ---
 
-### Workflow A — editing on the server (simpler)
+### Editing on the server (simpler)
 
 You SSH in, edit the files in place (`vim`, `nano`, or VS Code Remote-SSH), and run them right there. This is plain, ordinary git. There is nothing extra to learn.
 
@@ -307,7 +316,7 @@ git pull                              # start from current main, not something s
 git checkout -b feat/thing
 
 # ...edit files, then run them...
-.venv/bin/python main.py
+.venv/bin/python main.py # This is obviously when the main is wired up...
 
 git commit -am "implement thing"
 git push -u origin feat/thing
@@ -321,62 +330,6 @@ git pull
 ```
 
 **Editing and running happen in the same place, so you never push just to test.** You push when the work is actually done.
-
----
-
-### Workflow B — editing locally, running on the server (what Jorge does)
-
-Jorge edits locally. The catch is that **his machine has no database, so he cannot run anything locally** — the code has to reach the server before it can be tested, and git is the only acceptable way to move it.
-
-This adds two requirements that Workflow A does not have:
-
-1. **You must push before you can test.** Expect throwaway `wip` commits; that is normal and they get squashed later.
-2. **The first time you test a new branch on the server you need `git fetch` and `git checkout`, not `git pull`.** `git pull` only updates the branch you are currently standing on. If your server clone is sitting on `main` and you pull, git reports "Already up to date" and your new code is nowhere to be seen — because it is on a branch you have not switched to yet.
-
-Start the branch on your own machine:
-
-```bash
-# your machine
-git checkout main
-git pull
-git checkout -b feat/thing
-
-# ...edit files...
-git commit -am "wip"
-git push -u origin feat/thing
-```
-
-Pick the branch up in your server clone — this pair of commands is needed **once per branch**:
-
-```bash
-# your server clone
-git fetch                    # download the new branch from GitHub
-git checkout feat/thing      # switch onto it — this is the step people forget
-.venv/bin/python main.py     # now you can actually test
-```
-
-From here on, every round trip is a two-command loop, because both clones are already on the same branch:
-
-```bash
-# your machine
-git commit -am "wip" && git push
-
-# your server clone
-git pull && .venv/bin/python main.py
-```
-
-Worth adding to your server `~/.bashrc`:
-
-```bash
-alias rerun='git pull && .venv/bin/python main.py'
-```
-
-Once it works on the server, open the pull request, get a review, and merge. Then return **both** clones to a clean base — remember you have two working copies to keep straight, which is the price of this workflow:
-
-```bash
-git checkout main
-git pull
-```
 
 ---
 
@@ -405,28 +358,7 @@ Feature branches, pull requests into `main`, no direct pushes to `main`. Squash 
 
 ---
 
-## Troubleshooting
-
-Work top to bottom — the cause is almost never the Python.
-
-| Symptom | Cause | Fix |
-|---|---|---|
-| `connection refused` | Postgres isn't running | `cs166_db_start` |
-| `server closed the connection unexpectedly` | Postgres isn't running | `cs166_db_start` |
-| `connection timeout expired` | `.env` points somewhere unreachable | `DB_HOST` must be `localhost`, `DB_PORT` must equal `echo $PGPORT` |
-| `database "..." does not exist` | Wrong `DB_NAME` | Check spelling and capitals against `cs166_psql -d postgres -l` |
-| `password authentication failed` | Wrong `DB_USER` | Should be your netid |
-| `KeyError: 'DB_...'` | A variable is missing from `.env` | All five keys must be present, even if empty |
-| `psql: could not connect ... /var/run/postgresql` | Used plain `psql` | Use `cs166_psql` |
-| `git push` asks for a password | Remote is still HTTPS | `git remote set-url origin git@github.com:...` |
-| `ssh -T git@github.com` hangs | Port 22 blocked | Add the `~/.ssh/config` block from step 1.5 |
-| `cannot open display` / askpass error | Git tried a GUI prompt | `unset SSH_ASKPASS` |
-
-Reading the error precisely saves time. A `database does not exist` or `authentication failed` message is actually **good news** — it means you reached Postgres and only the `.env` values are wrong.
-
----
-
-Two separations we hold to deliberately:
+### Two separations to keep in mind:
 
 - **Connecting vs. initializing.** `src/db.py` only opens connections and is imported everywhere, so importing it must never be able to drop a table. Anything destructive lives in `scripts/`.
 - **Creating the instance vs. creating tables.** Starting the Postgres instance is a manual, documented step (Part 1). Creating tables and loading data is repeatable and scripted.
@@ -435,7 +367,15 @@ Schema and data live in `.sql` files, never in Python strings — those files ar
 
 ---
 
-## Conventions
+## Dependencies
+
+Since the libraries are declared in `pyproject.toml`, all you have to do is `uv sync`. This is a command that syncs all the libraries into your uv environment.  
+
+- `psycopg[binary]` — Postgres driver
+- `rich` — terminal UI
+- `python-dotenv` — loads `.env`
+
+## Conventions/libraries
 
 - **psycopg 3**, imported as `psycopg` — *not* psycopg2. Row factories, connection strings, and transaction semantics all differ; do not paste psycopg2 snippets.
 - **rich** for terminal UI.
@@ -454,19 +394,27 @@ Check syntax against the **PostgreSQL 10** documentation before proposing index 
 
 ---
 
-## Dependencies
+## Important notes
 
-- `psycopg[binary]` — Postgres driver
-- `rich` — terminal UI
-- `python-dotenv` — loads `.env`
+Two decisions that change how you write code. Neither is visible from reading `sql/schema.sql`, and both will cost you an hour if you find them the hard way.
 
----
+### Primary keys — omit the id and use `RETURNING`
 
-## Open questions
+Nothing in the instructor's schema auto-increments; every primary key is a plain `INT`. We fixed that ourselves in `sql/extensions.sql`, which adds one sequence per numeric-PK table and wires it in as the column `DEFAULT` — the same thing `SERIAL` does under the hood. So ids do generate themselves now, but only if you let them.
 
-None blocking right now.
+Practical upshot for every `INSERT` you write: **leave the id column out, and get the new id back with `RETURNING`.**
+
+```sql
+INSERT INTO bid (auction_id, buyer_login, bid_amount) VALUES (%s, %s, %s) RETURNING bid_id
+```
+
+`users` is the exception — it has no sequence, because its primary key is the `login` string you already have in hand.
+
+### The dataset is ours, and it comes last
 
 **Resolved 2026-08-20:** we generate our own dataset rather than waiting on one from the instructor. It lives in `sql/seed.sql` and is deliberately being written **last**, once the features are built and we know what shape the data needs to be. It needs enough rows for the indexing work in issue #17 to show measurable improvement, and it will use predictable logins (`buyer1`, `seller1`, `admin1`) so nobody has to grep generated rows mid-demo. §2.3 requires dataset choices be reported, so this paragraph goes in the report.
+
+Data you create through the running application persists — `load_db.py` is run once, not once per session.
 
 ---
 
