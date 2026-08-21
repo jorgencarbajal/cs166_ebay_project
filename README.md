@@ -77,7 +77,9 @@ Current as of 2026-08-21. See [Important notes](#important-notes) at the bottom 
 
 **The application runs.** `.venv/bin/python main.py` gets you: register → log in → your role's menu → log out → quit. Every action is on the menu; the ones whose feature module isn't written yet say so and name their issue.
 
-**Not started.** These files hold a docstring and nothing else: `users.py`, `items.py`, `auctions.py`, `bids.py`, `payments.py`, `shipments.py`. `sql/seed.sql` and `sql/indexes.sql` are empty on purpose — both are written last.
+**Not started.** These files hold a docstring and nothing else: `users.py`, `items.py`, `auctions.py`, `bids.py`, `payments.py`, `shipments.py`. `sql/indexes.sql` is empty on purpose — it is written last, once there is data worth measuring against.
+
+**`sql/seed.sql` holds a small starter dataset** — 7 users, 9 items, 7 auctions, 11 bids, 2 payments, 2 shipments. Every login is predictable (`admin1`, `seller1`, `buyer1`, …) and every password is `pass123`. It exists so no feature is blocked on another feature: there are already auctions to browse, bids to outbid, an unsold listing to auction, a won-but-unpaid auction, and a paid order waiting to ship. The larger dataset issue #17 needs comes later and replaces the rows without changing their shape.
 
 **Next up:** the features themselves, issues #3 onward. Each one is a vertical slice — a feature module plus the menu action that calls it — so three people can take three slices without touching the same file.
 

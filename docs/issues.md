@@ -4,7 +4,12 @@ Copy each block into a GitHub issue. Delete this file once the board is populate
 
 **Labels to create first:** `foundation`, `sql`, `client`, `tuning`, `docs`, `buyer`, `seller`, `admin`, `blocker`
 
-**Ordering:** #1 and #2 block everything else. Do not split up the feature work until both are merged.
+**Ordering:** #1 and #2 block everything else. **Both are now done** (2026-08-21) — the feature work can be split three ways.
+
+**Two things settled after these drafts were written, which override anything below that contradicts them:**
+
+- **Feature functions open their own connection and take a `Session`, not a `conn`.** The signatures below have been updated to match. The acting user's login is never a parameter — it comes from `session.login`, so nobody can act as someone else by passing a different name. A *target* login, as in the admin screens, is still a parameter. See `docs/architecture.md` §4.
+- **Menu role files contain no control flow.** They export `TITLE` and an `ACTIONS` list of `(key, label, function)` triples; `menus/__init__.py` owns the loop and the `except AppError`. To add a feature, write the function in its feature module and replace the placeholder body in your role file. See `docs/overview.md` under Menus.
 
 ---
 
@@ -36,7 +41,7 @@ Write `scripts/load_db.py`. It is run by hand, never imported, and it is the onl
 
 ---
 
-## 2. Shared foundation: errors, UI helpers, auth, session, and menu dispatch
+## 2. Shared foundation: errors, UI helpers, auth, session, and menu dispatch — DONE (2026-08-21)
 
 **Labels:** `foundation`, `client`, `blocker`
 
@@ -92,36 +97,45 @@ INSERT INTO bid (auction_id, buyer_login, bid_amount) VALUES (%s, %s, %s) RETURN
 
 §2.3 permits documented schema extensions and §3 offers extra credit for meaningful ones. The header comment in `sql/extensions.sql` is written to be lifted straight into the report.
 
-### `src/ui.py`
+### `src/ui.py` — DONE (2026-08-21)
 
 All `rich` usage lives here. No other module imports `rich`.
 
-- [ ] A single shared `Console`
-- [ ] `success(msg)`, `error(msg)`, `warn(msg)`, `info(msg)`
-- [ ] `table(rows, columns, title)` — takes the `dict_row` dicts that `db.py` already returns and renders a `rich.table.Table`
-- [ ] `prompt(label)`, `prompt_int(label)`, `prompt_decimal(label)`, `prompt_password(label)`, `confirm(label)` — all re-prompting on invalid input rather than crashing
-- [ ] `menu(title, options)` — prints a numbered list, returns the chosen key, rejects invalid choices
-- [ ] `page(rows, columns, title)` — shows one screenful and prompts `[n]ext / [b]ack / [q]uit`
+- [x] A single shared `Console`
+- [x] `success(msg)`, `error(msg)`, `warn(msg)`, `info(msg)`, plus `heading(text)` and `blank()`
+- [x] `table(rows, columns, title)` — takes the `dict_row` dicts that `db.py` already returns and renders a `rich.table.Table`
+- [x] `prompt(label)`, `prompt_int(label)`, `prompt_decimal(label)`, `prompt_password(label)`, `confirm(label)` — all re-prompting on invalid input rather than crashing
+- [x] `menu(title, options)` — prints a numbered list, returns the chosen key, rejects invalid choices
+- [x] `page(rows, columns, title)` — shows one screenful and prompts `\[n]ext / \[b]ack / \[q]uit`
+- [x] Symbols fall back to `OK / !! / ?? / --` when `sys.stdout.encoding` cannot render them, which is what lets the interface be previewed off-server
+- [x] `scripts/ui_demo.py` previews the whole thing with fake data and no database
 
 Money is `NUMERIC(10,2)` in the schema, so use `decimal.Decimal` and never `float`. Do the conversion here, once.
 
 **On `page()`:** a terminal cannot show a thousand rows, and a bare `LIMIT 50` is just scrollback. Built once here, it is reused by browse (#3), search (#4), the admin user list (#13), and the admin reports (#16) — so four features get pagination for the price of one, and it is a visible usability win for the +10% extra credit.
 
-### `src/auth.py`
+### `src/auth.py` — DONE (2026-08-21)
 
-- [ ] `register(conn, login, password, phone_num, address, favorite_category=None)` — inserts into `users`, raises `LoginTaken` on conflict, returns a `Session`
-- [ ] `login(conn, login, password)` — returns a `Session`, raises `BadCredentials`
+- [x] `Session` — a frozen dataclass of `login` and `role`, living here rather than in its own module
+- [x] `require_role(session, required_role, action)` — raises `NotAuthorized`, called at the top of restricted feature functions
+- [x] `register(login, password, phone_num, address, favorite_category=None)` — inserts into `users`, catches psycopg's `UniqueViolation` and raises `LoginTaken`, returns a `Session`
+- [x] `login(login, password)` — returns a `Session`, raises `BadCredentials`
+- [x] Covered by `scripts/smoke.py --only auth`, nine checks
+
+Note the signatures: no `conn` parameter. Both functions open their own connection.
 
 Per §6.1 new accounts are always `Buyer`; the schema already defaults it. Do not accept a role parameter here — only an Admin can change a role, and that is a separate feature.
 
 Passwords are stored as plain text to match the schema's `VARCHAR(100)`. Note that as a documented limitation in the report rather than quietly hashing — our own `seed.sql` uses plain text too, so hashing here would lock us out of every seeded account.
 
-### `src/menus/__init__.py`
+### `src/menus/__init__.py` — DONE (2026-08-21)
 
-- [ ] Opening menu: log in, register, quit
-- [ ] After authentication, dispatch on `session.role` to `buyer.menu()`, `seller.menu()`, or `admin.menu()`
-- [ ] A top-level `except AppError` so a business-rule violation prints a red line and returns to the menu instead of killing the program
-- [ ] Wire `main.py` to call into here — it is still a stub `print`
+- [x] Opening menu: log in, register, quit
+- [x] After authentication, `dispatch()` looks up `session.role` and feeds that module's `TITLE` and `ACTIONS` to the shared loop
+- [x] `run_role_menu()` — the one generic loop all three role menus run on, with the single `except AppError` that protects every action in the application
+- [x] `Log out` and `Quit` appended to every role menu automatically, so no role file lists them
+- [x] Deliberately no bare `except Exception` — a `KeyError` or a typo in our SQL still crashes, which is what we want while building
+- [x] `main.py` wired: one `SELECT 1` so a dead Postgres is reported before anyone types a password, then `menus.run()`
 
 Sellers and Admins can do everything a Buyer can (§6.1 lists the base actions for all users, with seller and admin privileges as *additional*). Structure the seller and admin menus to include the buyer options rather than duplicating that code.
 
@@ -137,7 +151,7 @@ List items available for auction. Available to every logged-in user (§6.1).
 
 **Tasks**
 
-- [ ] `auctions.browse(conn, limit, offset)` joining `item` and `auction`
+- [ ] `auctions.browse(session, limit, offset)` joining `item` and `auction`
 - [ ] Show item name, category, starting price, current highest bid, status
 - [ ] Paginate — the dataset may be large and a terminal cannot show 10,000 rows
 - [ ] Render with `ui.table`
@@ -154,7 +168,7 @@ Filtered search over auctions (§6.1).
 
 **Tasks**
 
-- [ ] `auctions.search(conn, name=None, category=None, max_price=None, status=None)`
+- [ ] `auctions.search(session, name=None, category=None, max_price=None, status=None)`
 - [ ] Case-insensitive partial match on `item_name` (`ILIKE`)
 - [ ] Exact match on `category`, ceiling on `current_highest_bid`, filter on `auction_status`
 - [ ] Build the WHERE clause from whichever filters were supplied — **parameterized**, never string-concatenated with user input
@@ -174,8 +188,8 @@ Full detail on a single auction (§6.1).
 
 **Tasks**
 
-- [ ] `auctions.detail(conn, auction_id)` returning item attributes, seller, current high bid, status, and winner if closed
-- [ ] `bids.history(conn, auction_id)` returning that auction's bids newest first
+- [ ] `auctions.detail(session, auction_id)` returning item attributes, seller, current high bid, status, and winner if closed
+- [ ] `bids.history(session, auction_id)` returning that auction's bids newest first
 - [ ] Menu shows the detail panel plus the bid history table
 - [ ] Raise a clear error for an auction id that does not exist
 
@@ -191,8 +205,8 @@ Full detail on a single auction (§6.1).
 
 **Tasks**
 
-- [ ] `users.get_profile(conn, login)`
-- [ ] `users.update_profile(conn, login, **fields)` accepting only `password`, `phone_num`, `address`, `favorite_category`
+- [ ] `users.get_profile(session)`
+- [ ] `users.update_profile(session, **fields)` accepting only `password`, `phone_num`, `address`, `favorite_category`
 - [ ] Reject attempts to change `login` or `role` at the module level, not just by omitting them from the menu
 - [ ] Edit menu leaves a field unchanged when the prompt is left blank
 
@@ -215,7 +229,7 @@ The most constraint-heavy feature in the project, and the one most likely to be 
 
 **Tasks**
 
-- [ ] `bids.place(conn, auction_id, buyer_login, amount)`
+- [ ] `bids.place(session, auction_id, amount)`
 - [ ] Wrap the whole thing in **one transaction**: read the auction, validate, `INSERT INTO bid`, `UPDATE auction SET current_highest_bid`
 - [ ] Lock the auction row with `SELECT ... FOR UPDATE` so two bids cannot both pass validation against a stale high bid
 - [ ] Raise `BidTooLow(current)`, `SelfBid`, or `AuctionClosed` as appropriate
@@ -236,15 +250,15 @@ Sellers list an item and open an auction on it (§6.2, §6.3).
 
 **Tasks**
 
-- [ ] `items.create(conn, seller_login, name, category, starting_price, description=None, condition=None, image_url=None)`
-- [ ] `auctions.create(conn, item_id, seller_login)` — status defaults to `Active`, `current_highest_bid` starts at 0
-- [ ] Do both in one transaction; an item with no auction is useless
-- [ ] Generate both ids via `ids.next_id`
+- [ ] `items.create(session, name, category, starting_price, description=None, condition=None, image_url=None)`
+- [ ] `auctions.create(session, item_id)` — status defaults to `Active`, `current_highest_bid` starts at 0
+- [ ] **Two separate menu actions, not one transaction** — "List a new item" and "Put a listing up for auction" are already on the Seller menu as separate entries. `auction.item_id` is `UNIQUE`, so auctioning is irreversible, and a Seller should be able to hold a listing back or fix a typo before it goes live. `sql/seed.sql` carries two items with no auction so this path has data to work with.
+- [ ] Omit `item_id` and `auction_id` from both `INSERT`s and take them back with `RETURNING` — `sql/extensions.sql` supplies them
 - [ ] Guard with `require_role(session, "Seller")` — the schema's `seller_role` foreign key will reject a Buyer, but the error message would be incomprehensible
 
-**Note:** `auction.item_id` is `UNIQUE`, so an item can only ever be auctioned once.
+**Note:** `auction.item_id` is `UNIQUE`, so an item can only ever be auctioned once. There is no relisting a failed auction without a new item row.
 
-**Done when:** a seller can list an item and it immediately appears in browse.
+**Done when:** a seller can list an item, then auction it, and it appears in browse.
 
 ---
 
@@ -256,8 +270,8 @@ Sellers list an item and open an auction on it (§6.2, §6.3).
 
 **Tasks**
 
-- [ ] `items.list_by_seller(conn, seller_login)` with each item's auction status and current bid
-- [ ] `items.update(conn, item_id, seller_login, **fields)` — verifies ownership and raises `NotAuthorized` otherwise
+- [ ] `items.list_by_seller(session)` with each item's auction status and current bid
+- [ ] `items.update(session, item_id, **fields)` — verifies ownership and raises `NotAuthorized` otherwise
 - [ ] Refuse to change `starting_price` once bids exist; moving the goalposts mid-auction is indefensible
 - [ ] Menu lists the seller's items and lets them pick one to edit
 
@@ -273,7 +287,7 @@ Sellers list an item and open an auction on it (§6.2, §6.3).
 
 **Tasks**
 
-- [ ] `auctions.end(conn, auction_id, seller_login)`
+- [ ] `auctions.end(session, auction_id)`
 - [ ] Verify ownership and that the auction is still `Active`
 - [ ] Find the highest bid, set `winner_login`, set `auction_status = 'Closed'`
 - [ ] Handle the no-bids case — close it with `winner_login` left NULL, which the schema allows
@@ -292,10 +306,10 @@ Sellers list an item and open an auction on it (§6.2, §6.3).
 
 **Tasks**
 
-- [ ] `payments.create(conn, auction_id, buyer_login, amount)`
+- [ ] `payments.create(session, auction_id, amount)`
 - [ ] Verify the auction is `Closed` and `winner_login` is this buyer — raise `NotWinner` otherwise
 - [ ] `payment.auction_id` is `UNIQUE`, so raise `AlreadyPaid` on a second attempt
-- [ ] `payments.list_for_buyer(conn, login)` so a buyer can see what they owe and what they have paid
+- [ ] `payments.list_for_buyer(session)` so a buyer can see what they owe and what they have paid
 - [ ] Amount should default to the winning bid rather than being freely typed
 
 **Done when:** a winning buyer can pay exactly once, and cannot pay for auctions they did not win.
@@ -310,9 +324,9 @@ Sellers list an item and open an auction on it (§6.2, §6.3).
 
 **Tasks**
 
-- [ ] `shipments.create(conn, auction_id, address)` — raise `PaymentIncomplete` unless the payment exists and is `Completed`
+- [ ] `shipments.create(session, auction_id, address)` — raise `PaymentIncomplete` unless the payment exists and is `Completed`
 - [ ] Default the address from the winning buyer's `users.address`, but allow an override
-- [ ] `shipments.update_status(conn, shipment_id, status, tracking_number=None)`
+- [ ] `shipments.update_status(session, shipment_id, status, tracking_number=None)`
 - [ ] Only the seller of that auction may create or update it
 - [ ] Buyers should be able to view shipment status for what they bought
 
@@ -328,8 +342,8 @@ Sellers list an item and open an auction on it (§6.2, §6.3).
 
 **Tasks**
 
-- [ ] `users.list_all(conn, role=None, search=None)` with pagination
-- [ ] `users.detail(conn, login)` showing their items, bids, and payments
+- [ ] `users.list_all(session, role=None, search=None)` with pagination
+- [ ] `users.detail(session, target_login)` showing their items, bids, and payments
 - [ ] Guard every function with `require_role(session, "Admin")`
 - [ ] Never display password values in any listing
 
@@ -349,7 +363,7 @@ The consequence: **demoting a Seller who owns items will cascade `seller_role` t
 
 **Tasks**
 
-- [ ] `users.change_role(conn, target_login, new_role)`
+- [ ] `users.change_role(session, target_login, new_role)`
 - [ ] Before updating, check whether the user has rows that depend on their current role, and raise a clear application-level error explaining why the change is refused
 - [ ] Decide and document the policy: refuse outright, or allow only when no dependent rows exist. Refusing is defensible and far simpler
 - [ ] Prevent an admin from demoting themselves and locking everyone out
@@ -367,8 +381,8 @@ The consequence: **demoting a Seller who owns items will cascade `seller_role` t
 
 **Tasks**
 
-- [ ] `items.admin_update(conn, item_id, **fields)` — no ownership restriction
-- [ ] `items.admin_delete(conn, item_id)`
+- [ ] `items.admin_update(session, item_id, **fields)` — no ownership restriction
+- [ ] `items.admin_delete(session, item_id)`
 - [ ] `item` is referenced by `auction` with `ON DELETE RESTRICT`, so a plain delete fails whenever an auction exists. Decide the policy: refuse while an auction exists, or cascade through auction → bids explicitly
 - [ ] Confirm destructive actions in the menu
 

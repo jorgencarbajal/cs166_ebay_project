@@ -2,7 +2,7 @@
 
 A map of `src/` — what each file is responsible for, what it is allowed to import, and how one user action travels through the system.
 
-> **Status:** most of this is design, not code. Only `src/db.py` and `sql/schema.sql` exist today. Everything else is the shape we agreed on before splitting up the work, so that three people writing in parallel end up with one coherent program instead of three. If a file described here is missing, it has not been written yet — see `docs/issues.md` for who is building what.
+> **Status (2026-08-21):** the foundation is built and the application runs. `db.py`, `errors.py`, `ui.py`, `auth.py`, all four files under `menus/`, and `main.py` exist and work — you can register, log in, reach your role's menu, and quit. The six **feature modules** are still docstrings, so every menu action currently says which issue will fill it in. See [issues.md](issues.md) for who is building what.
 
 Setup instructions live in the [README](../README.md). Task breakdown lives in [issues.md](issues.md). This file is only about the code.
 
@@ -44,9 +44,9 @@ Imports flow downward only. A feature module must never import a menu, and `db.p
 
 ## The foundation
 
-Five files that everything else depends on. These are built first, by one person, before the feature work splits three ways — because a half-finished `ui.py` blocks all three of us.
+Everything else depends on these. They were built first, by one person, before the feature work split three ways — because a half-finished `ui.py` blocks all three of us. **All of them exist and are tested.**
 
-### `src/db.py` — connections *(exists)*
+### `src/db.py` — connections
 
 Reads `.env` and hands out psycopg connections with `dict_row` set, so every query returns dictionaries keyed by column name rather than positional tuples.
 
@@ -60,31 +60,30 @@ They live together in one file so a menu can catch a specific one without import
 
 Some carry data. `BidTooLow` holds the current high bid, so the menu can say *"must exceed $45.00"* rather than *"bid too low."*
 
-### `src/session.py` — who is logged in
-
-A small dataclass holding `login` and `role`, passed down into the menus rather than kept in a global.
-
-It also holds `require_role(session, "Admin")`, which raises `NotAuthorized`. Permission checks belong in the feature modules, not only in the menus — hiding a menu option is not access control, and the graders will try calling things they shouldn't be able to.
-
-### `src/ids.py` — primary key generation
-
-Nothing in the instructor's schema auto-increments. Every primary key is a plain `INT`, so we generate ids for `item`, `auction`, `bid`, `payment`, and `shipment` ourselves.
-
-`next_id(conn, table, column)` returns `MAX(col) + 1`. It **must** be called inside the same transaction as the insert it feeds, or two concurrent inserts will compute the same number.
+> **There is no `src/session.py` and no `src/ids.py`.** Both were designed, then deleted before they were written. `Session` is a five-line dataclass and lives in `auth.py`; id generation moved into the database as sequences in `sql/extensions.sql`. Do not recreate either file.
 
 ### `src/ui.py` — everything the user sees
 
 The only module in the project that imports `rich`.
 
-Holds the shared console, `success` / `error` / `warn` / `info`, a `table()` that renders the `dict_row` dictionaries the feature modules return, a numbered `menu()`, and prompt helpers that re-ask on invalid input instead of crashing.
+Holds the shared console, `success` / `error` / `warn` / `info`, `heading`, `blank`, a `table()` that renders the `dict_row` dictionaries the feature modules return, `page()` for anything longer than a screen, a numbered `menu()`, and prompt helpers that re-ask on invalid input instead of crashing.
 
 Money is `NUMERIC(10,2)` in the schema, so prompts return `Decimal`, never `float`. That conversion happens here once rather than being reinvented in six modules.
 
-### `src/auth.py` — registration and login
+Symbols degrade gracefully: `ui.py` checks `sys.stdout.encoding` at import and falls back from `✓ ✗ ⚠ ·` to `OK / !! / ?? / --` where the terminal cannot render them. That fallback is why the interface can be previewed off-server with `scripts/ui_demo.py`.
 
-`register()` inserts a new user and returns a `Session`; `login()` verifies credentials and returns a `Session`.
+### `src/auth.py` — registration and login, and the `Session`
 
-New accounts are always `Buyer` — the schema defaults it and only an Admin can change it, so `register()` deliberately takes no role parameter.
+`register()` inserts a new user and returns a `Session`; `login()` verifies credentials and returns a `Session`. Both raise from `errors.py` — `LoginTaken` and `BadCredentials`.
+
+New accounts are always `Buyer` — the schema defaults it and only an Admin can change it, so `register()` deliberately takes no role parameter and omits the column from its `INSERT`.
+
+This file also holds the two things that were once going to be `session.py`:
+
+- **`Session`** — a frozen dataclass of `login` and `role`. Not a database session and holds no connection; it is the app's memory of who is logged in, held in a variable in `menus/__init__.py` and thrown away on logout. `frozen=True` means nothing downstream can quietly promote itself to Admin.
+- **`require_role(session, required_role, action)`** — raises `NotAuthorized` or returns quietly. Call it at the top of any restricted feature function. Hiding a menu option is not access control; the graders will try calling things they shouldn't be able to.
+
+**Every feature function takes a `Session`, never a bare login string.** That way identity always traces back to an actual login and a caller cannot act as someone else by passing a different username.
 
 ---
 
@@ -101,7 +100,19 @@ One per entity in the schema, so "which file does this belong in" is never a deb
 | `payments.py` | paying for a won auction | `payment` |
 | `shipments.py` | creating and updating shipments | `shipment` |
 
-Each function takes `conn` as its first argument. None of them open their own connections, and none of them print.
+**Each function opens its own connection and takes a `Session`, not a `conn`.** This is settled — `auth.py` is the worked example:
+
+```python
+def place(session, auction_id, amount):
+    with get_connection() as conn:
+        ...
+```
+
+The earlier draft of this document had feature functions take `conn` as their first argument. That was reconsidered: passing a connection in means the *menu* has to open it, which drags transaction management up into the layer that is supposed to contain no logic at all. Opening it here keeps the whole transaction inside the one function that owns the rule.
+
+`with get_connection() as conn:` commits on a clean exit and rolls back if an exception escapes, so **there is no `conn.commit()` anywhere in this project** and raising an `AppError` mid-transaction undoes it for free.
+
+The multi-step operations — placing a bid, ending an auction — are each a single function, so "one function, one connection, one transaction" holds everywhere. None of these modules print.
 
 SQL is written inline, as parameterized query strings next to the function that runs it. This is a deliberate exception to the rule that SQL lives in `.sql` files — that rule protects `schema.sql` and the dataset, which must survive losing the server. Application queries are code, and they are easier to read and debug beside the logic that uses them.
 
@@ -121,9 +132,36 @@ src/menus/
 
 Split by role for two reasons: it mirrors how the spec divides privileges, and it means three people can own three files and rarely touch the same lines.
 
-`__init__.py` shows the opening menu (log in, register, quit), and once a `Session` exists, dispatches to the matching role menu. It also holds the top-level `except AppError`, so a broken business rule prints a red line and returns to the menu rather than killing the program.
+**`__init__.py` owns all the control flow. The three role files own none of it.** That division is the thing to understand before touching either.
 
-Sellers and Admins can do everything a Buyer can — the spec lists the base actions as available to all users, with seller and admin abilities as *additional*. So the seller and admin menus include the buyer options rather than duplicating that code.
+`__init__.py` holds three nested loops:
+
+```
+run()                  the login gate — log in, register, or quit
+  run_role_menu()      one role's actions, repeating until Log out
+    one action         does its work, prints, returns to the menu above
+```
+
+plus `dispatch()` (role → module), `do_login()`, and `do_register()`. It also holds the `except AppError` that protects **every action in the application** — one try/except, not one per feature — so a broken business rule prints a red line and returns to the menu rather than killing the program.
+
+`buyer.py`, `seller.py`, and `admin.py` export exactly two names and nothing else:
+
+```python
+TITLE = "Buyer menu"
+
+ACTIONS = [
+    ("browse", "Browse open auctions", browse_auctions),
+    ("bid",    "Place a bid",          place_bid),
+]
+```
+
+No `while` loop, no `try/except`, no rendering. An action function takes the `Session` and returns nothing. `Log out` and `Quit` are appended by `run_role_menu()`, so never list them yourself.
+
+Sellers and Admins can do everything a Buyer can — the spec lists the base actions as available to all users, with seller and admin abilities as *additional*. So `seller.py` starts from `list(buyer.ACTIONS)` and appends, and `admin.py` starts from `list(seller.ACTIONS)`. The `list()` is a copy, not an alias: without it, appending would mutate the Buyer menu too.
+
+**The role files must never import `menus/__init__.py`.** Imports run one direction — `__init__` imports the three role files, they import `ui` and the feature modules. Reverse it and Python hits a half-built module and fails.
+
+**To add a feature:** write the function in its feature module, then replace the placeholder body in your role file. You do not touch `__init__.py`.
 
 ---
 
@@ -131,29 +169,39 @@ Sellers and Admins can do everything a Buyer can — the spec lists the base act
 
 Placing a bid, end to end:
 
-1. **`menus/buyer.py`** prompts for an auction id and an amount, converting the amount to `Decimal` via `ui.prompt_decimal`.
-2. It calls `bids.place(conn, auction_id, session.login, amount)`.
-3. **`bids.py`** opens a transaction, locks the auction row with `SELECT ... FOR UPDATE`, and checks the rules: auction is `Active`, the bidder is not the seller, the amount beats both `current_highest_bid` and the item's `starting_price`.
-4. If a rule fails it raises — `BidTooLow(current)`, `SelfBid`, or `AuctionClosed` — and the transaction rolls back.
-5. If everything passes it gets a `bid_id` from `ids.next_id`, inserts the bid, updates `auction.current_highest_bid`, commits, and returns the new id.
-6. **`menus/buyer.py`** either calls `ui.success` with the new bid id, or catches the exception and calls `ui.error` with its message.
+1. **`menus/__init__.py`** draws the Buyer menu, the user picks "Place a bid", and `run_role_menu()` calls `buyer.place_bid(session)` inside its `try`.
+2. **`menus/buyer.py`** prompts for an auction id and an amount, converting the amount to `Decimal` via `ui.prompt_decimal`.
+3. It calls `bids.place(session, auction_id, amount)`.
+4. **`bids.py`** opens a connection, locks the auction row with `SELECT ... FOR UPDATE`, and checks the rules: auction is `Active`, the bidder is not the seller, the amount beats both `current_highest_bid` and the item's `starting_price`.
+5. If a rule fails it raises — `BidTooLow(amount, minimum)`, `SelfBid`, or `AuctionClosed`. The exception escapes the `with` block, so psycopg rolls the transaction back automatically.
+6. If everything passes it inserts the bid **omitting `bid_id`** and takes the generated id back with `RETURNING bid_id`, updates `auction.current_highest_bid`, and returns. Leaving the `with` block commits.
+7. **`menus/buyer.py`** calls `ui.success` with the new bid id — or, if the feature module raised, never runs at all, because `run_role_menu()` caught the `AppError` and printed it in red.
 
-Note what each layer does not do. The menu knows no SQL. The feature module knows nothing about terminals. The rules are enforced in exactly one place, so they hold no matter who calls.
+Note what each layer does not do. The menu knows no SQL. The feature module knows nothing about terminals. Neither one writes a `try/except` for business rules — that lives in `run_role_menu()`, once. The rules are enforced in exactly one place, so they hold no matter who calls.
 
 ---
 
 ## Outside `src/`
 
 ```
-main.py                 entry point — hands control to menus/
+main.py                 entry point — checks the database is reachable, hands control to menus/
 scripts/load_db.py      run by hand; the only destructive code we write
+scripts/smoke.py        run by hand; checks the code against a live database
+scripts/ui_demo.py      run by hand; previews the interface, needs no database
 sql/schema.sql          the instructor's schema, verbatim, never edited
-sql/indexes.sql         our physical design work
-data/                   the dataset
-docs/                   this file, issues.md, the spec, the final report
+sql/extensions.sql      ours: one sequence per numeric-PK table
+sql/seed.sql            ours: the dataset
+sql/indexes.sql         ours: physical design work (empty until there is data to measure)
+docs/                   this file, architecture.md, issues.md, the spec, the final report
 ```
 
+There is no `data/` directory — the dataset is generated in SQL rather than loaded from files.
+
 `scripts/` versus `src/` is the important line: **things you import** versus **things you run on purpose**. `load_db.py` drops all six tables. It is a script precisely so that no import can ever trigger it.
+
+`main.py` is deliberately tiny. It runs one `SELECT 1` so a dead Postgres is reported before anyone types a password, then calls `menus.run()`. It catches `OperationalError` and `KeyboardInterrupt` and nothing else — `AppError` is handled below it, and anything else is a bug and is allowed to crash with its traceback intact.
+
+**`scripts/smoke.py` is how you check your work.** It runs 13 checks against a live database — schema, sequences, then registration and login — and grows a section per module as the modules land. It writes exactly one throwaway row and deletes it, so it is safe to re-run and safe to run mid-demo. Run it after every `git pull`.
 
 ---
 
@@ -163,5 +211,7 @@ Four properties of the schema that reading `schema.sql` top to bottom will not m
 
 - **`UNIQUE (login, role)` on `users` is load-bearing.** It looks redundant beside the `login` primary key. It exists so child tables can foreign-key to `(login, role)` and pin the role with a CHECK — which is how "only Sellers own items" is enforced by the database rather than by us. The consequence is that changing someone's role is genuinely difficult once they own rows.
 - **`auction.current_highest_bid` is denormalized.** The same fact lives in `bid` and on `auction`. Placing a bid must update both, in one transaction, or they drift apart.
-- **Nothing auto-increments.** Every insert needs an id from `ids.next_id`.
+- **Nothing auto-increments in the instructor's schema** — but we fixed it. `sql/extensions.sql` adds one sequence per numeric-PK table and wires it in as the column `DEFAULT`. So in practice ids generate themselves, provided you let them: **omit the id column from every `INSERT` and use `RETURNING`.** `users` is the exception, since its primary key is the `login` string.
 - **Auctions have no start or end time.** No column for it. An auction ends when its seller ends it, and never otherwise.
+
+One more, added since: **`sql/seed.sql` uses explicit ids** — a seed file has to reference its own rows — and therefore ends with a `setval` block that pushes each sequence past the seeded data. If you edit the seed, that block stays last.
