@@ -51,7 +51,6 @@ sql/
 
 scripts/
   load_db.py       run by hand — builds the database from the files above (destructive)
-  smoke.py         run by hand — checks the code works against a live database
   ui_demo.py       run by hand — previews the interface, needs no database
 ```
 
@@ -71,7 +70,6 @@ Current as of 2026-08-21. See [Important notes](#important-notes) at the bottom 
 | `src/menus/{buyer,seller,admin}.py` | Menu structure complete — every action is listed and reachable. The action *bodies* are placeholders naming the issue that will replace them. |
 | `main.py` | Checks the database is reachable, then hands off to `menus.run()`. |
 | `scripts/load_db.py` | Builds the database from the `sql/` files in one transaction. See [1.10](#110--build-the-database). |
-| `scripts/smoke.py` | Checks the code against a live database — 13 checks today, one section per module as they land. See [1.11](#111--verify-everything-works). |
 | `scripts/ui_demo.py` | Previews the whole interface with fake data and no database — `--all` runs every section, `--static` skips the interactive ones. |
 | `sql/schema.sql`, `sql/extensions.sql` | Both loaded on the server. Six tables and five sequences exist; the tables are still empty. |
 
@@ -268,7 +266,7 @@ Success looks like:
 
 If it fails, see [Troubleshooting](#troubleshooting).
 
-This one deliberately depends on nothing but `db.py`, which is why it is a raw one-liner and not a script — it is the check that still works when everything else is broken. The fuller check comes in [1.11](#111--verify-everything-works), once there are tables to check against.
+This one deliberately depends on nothing but `db.py`, which is why it is a raw one-liner and not a script — it is the check that still works when everything else is broken.
 
 ### 1.10 — Build the database
 
@@ -297,37 +295,6 @@ You should see six tables — `users`, `item`, `auction`, `bid`, `payment`, `shi
 
 **Why it is a script and not part of the app:** `src/db.py` is imported by everything and only ever opens connections, so no stray import can drop a table. Everything destructive lives in `scripts/`, which is only ever run by hand.
 
-### 1.11 — Verify everything works
-
-```bash
-.venv/bin/python scripts/smoke.py
-```
-
-This is the "is my setup actually correct" check. It connects, confirms all six tables and all five sequences exist, then registers a throwaway user, logs in as them, and confirms that a duplicate username, a wrong password, and an unknown username are each refused. Every check prints a green `✓` or a red `✗` with what it expected.
-
-```
-·   Target: jcarb044@localhost:40875/jcarb044_DB
-
-───────────────────────── Database and schema ─────────────────────────
-✓   Connection opens and Postgres answers
-✓   All six tables exist
-...
-✓   13 checks passed.
-```
-
-Two flags:
-
-```bash
-.venv/bin/python scripts/smoke.py --list          # what sections exist
-.venv/bin/python scripts/smoke.py --only auth     # run just one
-```
-
-**It is safe to re-run, and safe to run mid-demo.** It writes exactly one row — a user called `smoke_test_user` — and deletes it both before and after the auth section, so a run that crashed halfway cannot poison the next one. It drops nothing and touches no other data. That is the difference between this and `load_db.py`.
-
-**Run it after every `git pull`.** It grows a section per module as we build them, so it is the fastest way to find out whether someone else's merge broke something of yours. It exits `0` when everything passes and `1` when anything fails.
-
-If a check fails, the message says what it expected. `psycopg.OperationalError` on the very first check almost always means your Postgres instance is down — see [Troubleshooting](#troubleshooting).
-
 ---
 
 ## Part 2 — Every session
@@ -337,12 +304,10 @@ ssh <your-netid>@cs166.cs.ucr.edu
 cs166_db_status                          # start it with cs166_db_start if it is down
 cd ~/cs166_ebay_project
 git pull
-.venv/bin/python scripts/smoke.py        # confirm nothing that landed while you were away is broken
+.venv/bin/python main.py                 # run the application
 ```
 
 That's it. There is no tunnel to open and nothing to leave running in a second terminal.
-
-The `smoke.py` line is optional but cheap — it takes a second and tells you whether the problem you are about to hit is yours or came in with the pull.
 
 ---
 

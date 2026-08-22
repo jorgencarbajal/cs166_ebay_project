@@ -186,7 +186,6 @@ Note what each layer does not do. The menu knows no SQL. The feature module know
 ```
 main.py                 entry point — checks the database is reachable, hands control to menus/
 scripts/load_db.py      run by hand; the only destructive code we write
-scripts/smoke.py        run by hand; checks the code against a live database
 scripts/ui_demo.py      run by hand; previews the interface, needs no database
 sql/schema.sql          the instructor's schema, verbatim, never edited
 sql/extensions.sql      ours: one sequence per numeric-PK table
@@ -201,7 +200,7 @@ There is no `data/` directory — the dataset is generated in SQL rather than lo
 
 `main.py` is deliberately tiny. It runs one `SELECT 1` so a dead Postgres is reported before anyone types a password, then calls `menus.run()`. It catches `OperationalError` and `KeyboardInterrupt` and nothing else — `AppError` is handled below it, and anything else is a bug and is allowed to crash with its traceback intact.
 
-**`scripts/smoke.py` is how you check your work.** It runs 13 checks against a live database — schema, sequences, then registration and login — and grows a section per module as the modules land. It writes exactly one throwaway row and deletes it, so it is safe to re-run and safe to run mid-demo. Run it after every `git pull`.
+**There is no automated test suite.** You check your work by running the application against the seed data and walking the cases yourself. Every issue in [issues.md](issues.md) carries a `TESTING AGAINST SEED DATA` section naming the exact rows that exercise it — which auction has no bids, which was won and never paid, which items have no auction yet. Work that list before opening a PR.
 
 ---
 

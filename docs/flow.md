@@ -41,10 +41,6 @@ uv run main.py                         # run the application
 ```bash
 uv run main.py                         # the application itself
 
-uv run scripts/smoke.py                # check the code works against the database
-uv run scripts/smoke.py --list         # what sections of checks exist
-uv run scripts/smoke.py --only auth    # run just one section
-
 uv run scripts/ui_demo.py              # preview the interface, no database needed
 uv run scripts/ui_demo.py --all        # every section in order
 uv run scripts/ui_demo.py --static     # only the sections that need no typing
