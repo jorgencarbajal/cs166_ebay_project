@@ -1,7 +1,7 @@
 """
 The application. Run this to use the auction system.
 
-    .venv/bin/python main.py            # on the server
+    uv run main.py            # on the server
     .venv/Scripts/python.exe main.py    # on Windows
 
 This file is deliberately tiny. It checks the database is reachable, hands control to menus.run(), and catches the two things that should end the program rather than be shown as a menu message. Everything else -- the login gate, the role menus, every feature -- lives under src/.

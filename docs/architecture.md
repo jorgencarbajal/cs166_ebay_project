@@ -1,63 +1,63 @@
 # Architecture and design decisions
 
-Why the system is shaped the way it is — the data model's non-obvious properties, the layering we chose, and what each decision cost us.
+The data model, the decisions we made, and what we gave up for each one.
 
-> **Status (2026-08-21):** the foundation is built and the reasoning below has been tested against real code. Section 1.3 in particular is no longer an open question — we adopted sequences and they are loaded on the server. The six feature modules are still unwritten, so sections 4 and 5 remain forward-looking.
+> **Status (2026-08-21):** the foundation is built. Section 1.3 is settled — we use sequences, and they are loaded on the server. The six feature modules are not written yet, so sections 4 and 5 describe the plan rather than the code.
 
-Setup lives in the [README](../README.md). A file-by-file map lives in [overview.md](overview.md). Tasks live in [issues.md](issues.md). This file is about *why*.
+Setup is in the [README](../README.md). A file-by-file map is in [overview.md](overview.md). Tasks are in [issues.md](issues.md). This file is about *why*.
 
 ---
 
 ## 1. The data model
 
-The instructor supplied `sql/schema.sql` and it is used verbatim by the whole class. We do not edit it. Six tables: `users`, `item`, `auction`, `bid`, `payment`, `shipment`.
+The instructor gave us `sql/schema.sql` and the whole class uses it as-is. We do not edit it. Six tables: `users`, `item`, `auction`, `bid`, `payment`, `shipment`.
 
-Four properties of it drive most of our design, and none of them are obvious from reading the file top to bottom.
+Four things about it are not obvious from reading the file, and all four affect how we write code.
 
-### 1.1 `UNIQUE (login, role)` is load-bearing
+### 1.1 `UNIQUE (login, role)` matters more than it looks
 
-`users` declares `login` as its primary key and then adds what looks like a pointless second constraint:
+`users` has `login` as its primary key, then adds this:
 
 ```sql
 UNIQUE (login, role)
 ```
 
-A unique constraint on a superset of the primary key is always satisfied, so it constrains nothing. It exists for a different reason: **it gives child tables something to reference.**
+That constraint can never fail — `login` is already unique on its own. So why is it there? **So other tables can point at it.**
 
 ```sql
 seller_role VARCHAR(10) NOT NULL DEFAULT 'Seller' CHECK (seller_role = 'Seller'),
 FOREIGN KEY (seller_login, seller_role) REFERENCES users(login, role)
 ```
 
-An `item` carries both the seller's login *and* a `seller_role` column pinned to `'Seller'` by a CHECK. The composite foreign key then forces that pair to exist in `users`. The net effect: **the database itself refuses to let a Buyer own an item.** The same trick pins `bid.buyer_role` and `payment.buyer_login` to `'Buyer'`.
+An `item` stores the seller's login *and* a `seller_role` column locked to `'Seller'` by a CHECK. The foreign key then requires that pair to exist in `users`. Result: **the database refuses to let a Buyer own an item.** Same trick locks `bid.buyer_role` to `'Buyer'`.
 
-This is a genuinely elegant way to express role-based integrity in pure SQL, with no triggers.
+It's a clean way to enforce roles in pure SQL, with no triggers.
 
-**What it costs us.** Those foreign keys are `ON UPDATE CASCADE`. Promoting or demoting a user rewrites `users.role`, which cascades into every dependent row's `*_role` column — and immediately violates the CHECK that pins it. Demote a Seller who owns items and `item.seller_role` cascades to `'Buyer'`, which `CHECK (seller_role = 'Seller')` rejects.
+**The cost.** Those foreign keys are `ON UPDATE CASCADE`. Changing `users.role` cascades into every child row's `*_role` column, which then breaks the CHECK that locks it. Demote a Seller who owns items, and `item.seller_role` changes to `'Buyer'`, which `CHECK (seller_role = 'Seller')` rejects.
 
-So "Admin changes a user's role," a one-line requirement in §6.1, is only safe when the user owns no dependent rows. Our policy is to detect that case up front and refuse with an explanation, rather than let a constraint violation surface as an unreadable error. This is a real, documentable limitation of the relational design — exactly the kind §2.2 asks groups to write down.
+So "Admin changes a user's role" only works if the user owns no rows in other tables. We check first and refuse with a clear message. This goes in the report as a limitation of the design (§2.2 asks for exactly this).
 
-### 1.2 `current_highest_bid` is denormalized
+### 1.2 `current_highest_bid` is stored twice
 
-`auction.current_highest_bid` duplicates something already derivable:
+`auction.current_highest_bid` duplicates something you could calculate:
 
 ```sql
 SELECT MAX(bid_amount) FROM bid WHERE auction_id = ?
 ```
 
-Storing it anyway is the right call. Browse and search display the current price on every row, and recomputing an aggregate per row would turn a cheap listing query into an expensive one. It also gives the bid rule — "each new bid must be greater than the current highest" — a single column to compare against.
+Storing it is still the right call. Browse and search show the current price on every row, and running that aggregate per row would make a cheap query expensive. It also gives the bid rule one column to compare against.
 
-**What it costs us.** Two sources of truth that can disagree. Every bid must insert into `bid` **and** update `auction`, in one transaction, or the auction shows a stale price and subsequent bids validate against the wrong number.
+**The cost.** Two copies of the same fact, and they can disagree. Every bid has to insert into `bid` **and** update `auction`, in one transaction — otherwise the auction shows a stale price and the next bid is checked against the wrong number.
 
-It also creates a race. Two buyers reading `current_highest_bid = 50` simultaneously can both submit 55, and both pass validation. We take `SELECT ... FOR UPDATE` on the auction row so the second transaction waits for the first to commit and then re-reads the real value.
+There's also a race. Two buyers both read `current_highest_bid = 50` and both bid 55. Both pass validation. We use `SELECT ... FOR UPDATE` on the auction row so the second one waits for the first to finish, then re-reads the real value.
 
-Realistically our demo is single-user, so this will never fire in practice. We do it anyway because it is correct, it costs one clause, and "how do you handle concurrent bids" is an obvious question to be asked during the demo.
+Our demo is single-user, so this will never actually happen. We do it anyway: it costs one clause, and "how do you handle two bids at once" is an obvious demo question.
 
-### 1.3 Nothing auto-increments — so we added sequences
+### 1.3 Nothing auto-increments, so we added sequences
 
-Every primary key in the instructor's schema is a plain `INT`. No `SERIAL`, no `GENERATED ... AS IDENTITY`. Something has to invent the next id for `item`, `auction`, `bid`, `payment`, and `shipment` on every insert.
+Every primary key is a plain `INT`. No `SERIAL`, no `IDENTITY`. Something has to produce the next id for `item`, `auction`, `bid`, `payment`, and `shipment`.
 
-**Settled 2026-08-20: we add our own sequences.** `sql/extensions.sql` creates one per numeric-PK table and wires it in as the column `DEFAULT`, which is exactly what `SERIAL` does under the hood — written out by hand because we are not allowed to edit the instructor's `CREATE TABLE`.
+**Settled 2026-08-20: we add our own sequences.** `sql/extensions.sql` makes one per table and sets it as the column default:
 
 ```sql
 CREATE SEQUENCE item_id_seq;
@@ -65,26 +65,28 @@ ALTER TABLE item ALTER COLUMN item_id SET DEFAULT nextval('item_id_seq');
 ALTER SEQUENCE item_id_seq OWNED BY item.item_id;
 ```
 
-**The alternative we rejected** was `SELECT COALESCE(MAX(id), 0) + 1` in the application. It has to run inside the same transaction as the insert it feeds, two transactions can still read the same `MAX` and collide on a unique violation, and so every insert in the project would need retry logic wrapped around it. A sequence hands out a guaranteed-unique number with no locking and no retries. `src/ids.py` was deleted before it was written.
+That is what `SERIAL` does internally. We write it by hand because we can't edit the instructor's `CREATE TABLE`.
 
-**What this buys us beyond correctness:** it is a schema *extension* rather than a schema edit, which §2.3 permits when documented and §3 offers extra credit for. This section is that documentation.
+**What we rejected:** `SELECT COALESCE(MAX(id), 0) + 1` in Python. It has to run in the same transaction as the insert, two transactions can still read the same `MAX` and collide, and every insert would need retry logic. Sequences never hand out a duplicate and need no retries. `src/ids.py` was deleted before it was written.
 
-**What it costs:** every `INSERT` must omit the id column and use `RETURNING` to get it back. Name the id explicitly and you defeat the default. `users` has no sequence — its primary key is the `login` string the user types at registration.
+**Bonus:** this is a schema *extension*, not an edit. §2.3 allows it if documented, §3 gives extra credit for it. This section is the documentation.
 
-**One consequence to remember.** `sql/seed.sql` supplies explicit ids, because a seed file has to reference its own rows. The sequences therefore never advance while it loads and would hand out `1` again, colliding with seeded data on the first insert through the app. `seed.sql` ends with a `setval` block that pushes each sequence past the seeded rows, and that block must stay last.
+**The cost:** every `INSERT` must leave the id column out and use `RETURNING` to get it back. Name the id yourself and you defeat the default. `users` has no sequence — its key is the `login` string.
+
+**One gotcha.** `sql/seed.sql` uses explicit ids, because a seed file has to reference its own rows. That means the sequences never move while it loads, so the first insert from the app would ask for `1` and collide. `seed.sql` ends with a `setval` block that pushes each sequence past the seeded rows. **That block stays last.**
 
 ### 1.4 Auctions have no start or end time
 
-There is no `end_time`, no `created_at`, nothing temporal on `auction` at all. The only timestamp in the entire schema is `bid.bid_timestamp`.
+No `end_time`, no `created_at`, nothing. The only timestamp in the whole schema is `bid.bid_timestamp`.
 
-Per §6.3 an auction ends when its seller ends it — there is no scheduled expiry and nothing needs to run in the background. That simplifies the system considerably. It also means "search auctions" has no time dimension, and any report about auction duration would have to infer it from bid timestamps.
+Per §6.3 an auction ends when the seller ends it. Nothing expires on a schedule and nothing runs in the background, which makes the system simpler. It also means search has no time filter, and any report about how long an auction ran would have to work it out from bid timestamps.
 
 ### 1.5 Other constraints worth knowing
 
-- `auction.item_id` is `UNIQUE` — an item can be auctioned exactly once, ever.
-- `payment.auction_id` and `shipment.auction_id` are both `UNIQUE` — one payment and one shipment per auction, so "already paid" is enforced by the database.
-- `bid` is `ON DELETE CASCADE` from `auction`; everything else is `ON DELETE RESTRICT`. Deleting an item with an auction fails by design, which the admin delete feature has to handle deliberately.
-- Passwords are `VARCHAR(100)` and stored in plain text. We keep it that way to stay compatible with the provided dataset, and record it as a documented limitation rather than quietly hashing.
+- `auction.item_id` is `UNIQUE` — an item can be auctioned once, ever.
+- `payment.auction_id` and `shipment.auction_id` are `UNIQUE` — one payment and one shipment per auction, so the database enforces "already paid."
+- `bid` is `ON DELETE CASCADE` from `auction`. Everything else is `ON DELETE RESTRICT`, so deleting an item that has an auction fails on purpose. The admin delete feature has to handle that.
+- Passwords are `VARCHAR(100)`, plain text. We keep it that way and record it as a limitation instead of quietly hashing.
 
 ---
 
@@ -94,83 +96,101 @@ Per §6.3 an auction ends when its seller ends it — there is no scheduled expi
 main.py → menus/ → feature modules → db.py → PostgreSQL
 ```
 
-Imports flow one direction only. The rule that gives the layering teeth:
+Imports go one direction only. The rule that makes the layers real:
 
-> **Feature modules return data or raise. They never print. Menus catch and render.**
+> **Feature modules return data or raise an error. They never print. Menus catch errors and display things.**
 
-`bids.place()` does not know whether a person, a test, or a script called it. It raises `BidTooLow(current=45.00)`. `menus/buyer.py` catches that and decides the user sees a red line saying the bid must exceed $45.00.
+`bids.place()` doesn't know if a person, a test, or a script called it. It raises `BidTooLow`. `menus/buyer.py` catches it and decides the user sees a red line.
 
-**Why it earns its keep here.** Three people are writing menus at the same time on a ten-day deadline. Because presentation is confined to `ui.py` and the menu layer, restyling the whole interface later touches a handful of files — and interface quality is explicitly worth extra credit under §3. It also makes the business rules testable without a terminal, and puts each rule in exactly one place so it cannot be enforced inconsistently.
+**Why it's worth it.** Three people write menus at the same time. Keeping all display code in `ui.py` and the menu layer means restyling the interface later touches a few files instead of twelve — and interface quality is worth extra credit under §3. It also means the rules can be tested without a terminal, and each rule exists in one place so it can't be enforced two different ways.
 
-**What it costs.** More ceremony. Placing a bid touches three files instead of one, and `errors.py` is a file that exists purely to hold exception classes. On a small project you feel that cost immediately and the benefit only later.
+**The cost.** More files. Placing a bid touches three of them, and `errors.py` exists only to hold exception classes. On a project this size you feel that immediately and the benefit only later.
 
-### 2.1 Permission checks live in the feature modules
+### 2.1 Permission checks go in the feature modules
 
-`require_role` is called inside the feature functions, not only when building the menu. Hiding an option from a Buyer's menu is not access control; it is decoration. The schema's role foreign keys would catch most violations anyway, but a raw constraint error is not an explanation.
+`require_role` is called inside the feature function, not just when building the menu. Hiding an option from a Buyer's menu is not security — it's decoration. The schema's role foreign keys would catch most of it anyway, but a raw constraint error doesn't explain anything to the user.
 
 ### 2.2 Menus are split by role
 
-`menus/buyer.py`, `menus/seller.py`, `menus/admin.py`. This mirrors how §6.1 divides privileges, and — the practical reason — it lets three people own three files instead of contending over one dispatch table.
+`menus/buyer.py`, `menus/seller.py`, `menus/admin.py`. This matches how §6.1 splits privileges, and it lets three people own three files instead of fighting over one.
 
-Sellers and Admins get the buyer actions too, since §6.1 lists the base actions as available to all users with the others as *additional*. `seller.py` starts from `list(buyer.ACTIONS)` and appends; `admin.py` starts from `list(seller.ACTIONS)`.
+Sellers and Admins get the Buyer actions too, since §6.1 says the base actions are available to everyone. `seller.py` starts from `list(buyer.ACTIONS)` and adds to it; `admin.py` starts from `list(seller.ACTIONS)`.
 
-**Settled 2026-08-21: the role files contain no control flow.** They export a `TITLE` string and an `ACTIONS` list of `(key, label, function)` triples, and `menus/__init__.py` holds the single generic loop that renders any of them, dispatches, and catches `AppError`.
+**Settled 2026-08-21: the role files have no control flow.** They export a `TITLE` string and an `ACTIONS` list of `(key, label, function)` triples. `menus/__init__.py` has the one loop that displays any of them, calls the chosen function, and catches `AppError`.
 
-The alternative was for each role file to run its own `while` loop with its own `try/except`. Three reasons we did not:
+The alternative was each role file running its own `while` loop and its own `try/except`. Three reasons we didn't:
 
-- **One `except AppError` for the whole application** instead of one per action. A `BidTooLow` is rendered identically no matter where it came from, and nobody can forget to catch it.
-- **Two of these three files are owned by people who have not written the rest of the system.** Handing them a list to fill in rather than a loop to get right is the cheapest risk reduction available.
-- **No circular import.** The first draft had the role files importing `run_role_menu` back out of `menus/__init__.py`, which fails — Python reaches a half-built module. Data-only exports keep imports flowing one direction, consistent with §2 above.
+- **One `except AppError` for the whole app** instead of one per action. Errors look the same everywhere, and nobody can forget to catch one.
+- **Two of these three files belong to people who didn't build the rest of the system.** Giving them a list to fill in is safer than giving them a loop to get right.
+- **No circular import.** The first draft had the role files importing `run_role_menu` from `menus/__init__.py`, which fails — Python hits a half-built module. Exporting only data keeps imports going one way.
 
-The cost is one indirection: reading `buyer.py` does not show you the loop that runs it. The docstring at the top of each role file says where to look.
+The cost: reading `buyer.py` doesn't show you the loop that runs it. Each role file's docstring says where to look.
 
 ---
 
 ## 3. Where SQL lives
 
-Two rules that look contradictory and are not.
+Two rules that sound contradictory but aren't.
 
-**Schema and dataset live in `.sql` files, never in Python strings.** `sql/schema.sql` and the data are the source of truth. If a server instance is lost — and it is a user process that dies on reboot, so this is not hypothetical — those files are what rebuild it. `scripts/load_db.py` is a thin runner that reads them off disk.
+**Schema and data live in `.sql` files, never in Python strings.** `sql/schema.sql`, `extensions.sql`, and `seed.sql` are the source of truth. The Postgres instance is a user process that dies on reboot, so losing it is realistic — those files are what rebuild it. `scripts/load_db.py` just reads and runs them.
 
-**Application queries live inline in the feature modules**, as parameterized strings next to the function that runs them. They are code: they change with the logic around them, and splitting them into 25 tiny files would mean a second file open for every debugging session and nothing gained.
+**Application queries live inline in the feature modules**, next to the function that uses them. They're code: they change when the logic changes, and splitting them into 25 tiny files would mean opening a second file every time you debug.
 
-The line between the two is *what has to survive losing the server*.
+The line between the two: **does it need to survive losing the server?**
 
-**Non-negotiable:** parameters are always passed as psycopg's second argument. Never build a query by concatenating user input, even for something as innocent as a search filter.
+**Never negotiable:** pass parameters as psycopg's second argument. Never build a query by concatenating user input, not even a search filter.
 
 ---
 
 ## 4. Transactions
 
-Most operations are a single statement and need nothing special. Three are genuinely multi-step and must be atomic:
+Most operations are one statement and need nothing special. Three are multi-step and have to be all-or-nothing:
 
-- **Placing a bid** — lock the auction, validate, insert the bid, update `current_highest_bid`. Discussed in §1.2 above.
-- **Ending an auction** — find the highest bidder, set `winner_login`, set status to `Closed`. Half of that is worse than none of it.
-- **Paying for a won auction** — insert the payment and create the `Pending` shipment together, so nothing ends up paid for and unshippable.
+- **Placing a bid** — lock the auction, validate, insert the bid, update `current_highest_bid`. See §1.2.
+- **Ending an auction** — find the highest bidder, set `winner_login`, set status to `Closed`. Half of that is worse than none.
+- **Paying for a won auction** — insert the payment and create the `Pending` shipment together, so nothing ends up paid for but unshippable.
 
-**Listing an item and auctioning it are deliberately separate operations**, not one transaction. An earlier draft of this section said to insert the item and its auction together. Reconsidered: `auction.item_id` is `UNIQUE`, so an item can be auctioned exactly once ever, and forcing the two together means a Seller can never hold a listing back or fix a typo before it goes live. `sql/seed.sql` carries two items with no auction precisely so this path has test data.
+**Listing an item and auctioning it are two separate actions, not one transaction.** An earlier draft said to do both at once. We changed it: `auction.item_id` is `UNIQUE`, so auctioning is permanent, and a Seller should be able to fix a typo before the listing goes live. `sql/seed.sql` has two items with no auction so this path has test data.
 
-**Every feature function opens its own connection and runs its whole transaction inside it** — `with get_connection() as conn:`. Connections are not passed in from the menu layer, because that would drag transaction management up into the layer that is supposed to hold no logic. psycopg 3 connections are context managers, so leaving the block commits and an escaping exception rolls back. Since our exceptions *are* the failure signal, rollback is automatic — raising `BidTooLow` inside the block undoes the transaction for free, and **there is no `conn.commit()` anywhere in this project**.
+**Every feature function opens its own connection** and runs its whole transaction inside it:
+
+```python
+with get_connection() as conn:
+    ...
+```
+
+We don't pass `conn` in from the menu, because that would put transaction management in the layer that's supposed to have no logic.
+
+psycopg 3 connections are context managers: leaving the block commits, and an exception escaping rolls back. Our exceptions *are* the failure signal, so rollback is free — raising `BidTooLow` inside the block undoes the transaction. **There is no `conn.commit()` anywhere in this project.**
 
 ---
 
 ## 5. Physical design
 
-Worth 10% of the project grade, and the schema arrives with **no indexes beyond primary keys and unique constraints**. That empty space is the assignment.
+Worth 10% of the grade. The schema ships with **no indexes except primary keys and unique constraints**. Filling that gap is the assignment.
 
-The plan: get features working, capture the queries they actually run, record `EXPLAIN ANALYZE` baselines, add indexes in `sql/indexes.sql` one at a time, and re-measure. Likely candidates are `item(category)`, `item(item_name)` for the `ILIKE` search, `bid(auction_id, bid_amount DESC)` for finding a winner, and `auction(auction_status)`.
+The plan: get features working, note which queries they actually run, record `EXPLAIN ANALYZE` before, add indexes to `sql/indexes.sql` one at a time, measure again.
 
-Indexes that turn out not to help are still findings, and saying so with numbers is worth more than a list of indexes with no measurements.
+Likely candidates:
 
-**The server runs PostgreSQL 10.23 (2017).** This is old enough to matter:
+| Index | For |
+|---|---|
+| `item(category)` | browse and search filters |
+| `item(item_name)` | the `ILIKE` name search |
+| `bid(auction_id, bid_amount DESC)` | finding an auction's winner |
+| `auction(auction_status)` | listing only Active auctions |
 
-- `CREATE INDEX ... INCLUDE (...)` — covering indexes — is PG 11+ and will error.
+An index that turns out not to help is still a finding. Reporting that with numbers is worth more than a list of indexes with no measurements.
+
+**The server runs PostgreSQL 10.23 (2017).** Old enough to matter:
+
+- `CREATE INDEX ... INCLUDE (...)` is PG 11+ and will error.
 - No `CALL`, no stored procedures. Functions only.
 - None of the PG 11+ planner improvements.
 
-Check syntax against the PostgreSQL 10 documentation. Anything written for a modern Postgres will hand you syntax that fails here.
+Check syntax against the PostgreSQL 10 docs. Modern tutorials will give you syntax that fails here.
 
-One caveat: index effects are only measurable on enough rows. **`sql/seed.sql` today is a development dataset, not a measurement one** — 38 rows, sized to unblock feature work rather than to move a query plan. Before #17 can produce a real number, it needs bulk data, which is what `generate_series` is for. §2.3 permits dataset modification when it is reported, and §2.3 is also why the seeding choices go in the report.
+**One catch:** indexes only show a difference on enough rows. `sql/seed.sql` today is 38 rows — sized to unblock feature work, not to move a query plan. Issue #17 needs bulk data first, which is what `generate_series` is for. §2.3 allows changing the dataset if we report it, which is also why the seeding choices go in the report.
 
 ---
 
@@ -178,28 +198,28 @@ One caveat: index effects are only measurable on enough rows. **`sql/seed.sql` t
 
 | Decision | Chosen | Alternative | Why |
 |---|---|---|---|
-| Connection lifetime | New connection per operation | One shared connection | Single-user app; a dead database fails loudly and immediately instead of leaving a stale handle |
-| Row format | `dict_row` | Positional tuples | `row["bid_amount"]` cannot silently break when a column is added |
-| Application SQL | Inline in modules | Separate `.sql` files | Queries are code; keeping them beside their logic is faster to write and debug |
-| Schema and data | `.sql` files only | Python strings | They must survive losing the server instance |
-| Presentation | Only in `ui.py` and menus | Modules print directly | One place to restyle; business rules stay testable |
+| Connection lifetime | New connection per operation | One shared connection | Single-user app; a dead database fails immediately instead of leaving a stale handle |
+| Row format | `dict_row` | Positional tuples | `row["bid_amount"]` can't silently break when a column is added |
+| Application SQL | Inline in modules | Separate `.sql` files | Queries are code; keeping them next to their logic is faster to debug |
+| Schema and data | `.sql` files only | Python strings | They have to survive losing the server |
+| Display code | Only in `ui.py` and menus | Modules print directly | One place to restyle; rules stay testable |
 | Menu structure | One file per role | Single dispatch table | Three people, three files, few conflicts |
-| Primary keys | Sequences in `sql/extensions.sql` | `MAX+1` in Python | No locking, no retries, no same-transaction constraint; also a documented schema extension worth extra credit (§1.3) |
-| Connection ownership | Each feature function opens its own | Menu passes `conn` in | Keeps the whole transaction inside the function that owns the rule (§4) |
-| Menu control flow | One generic loop in `menus/__init__.py` | A loop per role file | One `except AppError` for the whole app; role files stay a list two teammates can safely fill in (§2.2) |
-| `Session` | A dataclass inside `auth.py` | A `session.py` module | Five lines and one function did not justify a module |
-| Password storage | Plain text | Hashed | Compatibility with the provided dataset; documented as a limitation |
+| Primary keys | Sequences in `extensions.sql` | `MAX+1` in Python | No locking, no retries; also a documented extension worth extra credit (§1.3) |
+| Connection ownership | Feature function opens its own | Menu passes `conn` in | Keeps the transaction inside the function that owns the rule (§4) |
+| Menu control flow | One loop in `menus/__init__.py` | A loop per role file | One `except AppError` for the whole app; role files stay a list (§2.2) |
+| `Session` | A dataclass in `auth.py` | A `session.py` module | Five lines and one function didn't justify a file |
+| Passwords | Plain text | Hashed | Matches the schema and the seed data; documented as a limitation |
 | Concurrency | `SELECT ... FOR UPDATE` on bids | Nothing | One clause, and it makes the demo answer defensible |
 
 ---
 
 ## 7. Known limitations
 
-Collected here because §2.2 asks for them and the final report needs this list.
+§2.2 asks for these and the final report needs the list.
 
-- **Role changes are restricted.** The composite role foreign keys make it unsafe to change a user's role once they own dependent rows. We detect and refuse rather than corrupt data. (§1.1)
-- **Passwords are stored in plain text**, matching the schema and dataset. (§1.5)
-- **`current_highest_bid` is denormalized** and correct only because every write path maintains it. Any future code path that inserts into `bid` directly would break that invariant. (§1.2)
-- **Primary keys are generated by sequences we added ourselves**, not by the instructor's schema. This is a documented extension rather than a limitation, but it means our `sql/extensions.sql` must be loaded after `sql/schema.sql` or every insert fails. (§1.3)
-- **Auctions cannot expire on their own** — there is nowhere in the schema to record an end time. (§1.4)
-- **An item can only ever be auctioned once**, so a failed auction cannot be relisted without a new item row. (§1.5)
+- **Role changes are restricted.** The composite role foreign keys make it unsafe to change someone's role once they own rows elsewhere. We detect it and refuse rather than corrupt data. (§1.1)
+- **Passwords are plain text.** (§1.5)
+- **`current_highest_bid` is duplicated data**, correct only because every write path maintains it. Any future code that inserts into `bid` directly would break it. (§1.2)
+- **Primary keys come from sequences we added**, not from the instructor's schema. `sql/extensions.sql` must load after `sql/schema.sql` or every insert fails. (§1.3)
+- **Auctions can't expire on their own** — there's nowhere in the schema to store an end time. (§1.4)
+- **An item can only be auctioned once**, so a failed auction can't be relisted without creating a new item. (§1.5)
