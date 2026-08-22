@@ -27,7 +27,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # src/ is not an installed package, so Python would not find it on its own. Putting the repo root at the front of sys.path lets "from src import ..." work no matter which directory you launched the script from.
 sys.path.insert(0, str(REPO_ROOT))
 
-from src import auth, ui
+from src import auctions, auth, ui
 from src.db import get_connection
 from src.errors import BadCredentials, LoginTaken, NotAuthorized
 
@@ -253,6 +253,66 @@ AUTH_CHECKS = [
 ]
 
 
+# SECTION: BROWSE --------------------------------------------------------------------------------
+#
+# Issue #3, and the template for every feature section added after it. Checks the shape and the rules of what browse() returns rather than exact row counts, so these keep passing when issue #17 replaces the seed with bulk data.
+
+# Built by hand rather than fetched. browse() ignores it today, but every feature function takes one.
+BROWSE_SESSION = auth.Session(login=SMOKE_LOGIN, role="Buyer")
+
+# The columns menus/buyer.py asks for. If the SELECT ever drops one, the menu would render a blank column instead of failing, so check it here.
+BROWSE_COLUMNS = ["auction_id", "item_name", "category", "starting_price", "current_highest_bid", "seller_login"]
+
+
+def check_browse_returns_rows():
+    rows = auctions.browse(BROWSE_SESSION)
+
+    assert isinstance(rows, list), "a list, got {}".format(type(rows).__name__)
+    assert rows, "at least one Active auction -- run scripts/load_db.py to load sql/seed.sql"
+
+
+def check_browse_has_every_column():
+    row = auctions.browse(BROWSE_SESSION)[0]
+    missing = [name for name in BROWSE_COLUMNS if name not in row]
+
+    assert not missing, "every column the menu renders, missing {}".format(", ".join(missing))
+
+
+def check_browse_joins_the_item():
+    """The JOIN is the point of the query -- name and category live on item, not auction."""
+    row = auctions.browse(BROWSE_SESSION)[0]
+
+    assert row["item_name"], "a non-empty item_name from the JOIN, got {!r}".format(row["item_name"])
+    assert row["category"], "a non-empty category from the JOIN, got {!r}".format(row["category"])
+
+
+def check_browse_excludes_closed_auctions():
+    """Browse answers 'what can I bid on', so a Closed auction must not appear."""
+    ids = {row["auction_id"] for row in auctions.browse(BROWSE_SESSION)}
+
+    with get_connection() as conn:
+        closed = conn.execute("SELECT auction_id FROM auction WHERE auction_status = 'Closed'").fetchall()
+
+    leaked = [row["auction_id"] for row in closed if row["auction_id"] in ids]
+
+    assert not leaked, "no Closed auctions in the results, found {}".format(leaked)
+
+
+def check_browse_is_newest_first():
+    ids = [row["auction_id"] for row in auctions.browse(BROWSE_SESSION)]
+
+    assert ids == sorted(ids, reverse=True), "auction ids in descending order, got {}".format(ids)
+
+
+BROWSE_CHECKS = [
+    ("browse() returns a list of rows", check_browse_returns_rows),
+    ("browse() returns every column the menu renders", check_browse_has_every_column),
+    ("browse() joins item for name and category", check_browse_joins_the_item),
+    ("browse() excludes Closed auctions", check_browse_excludes_closed_auctions),
+    ("browse() orders newest first", check_browse_is_newest_first),
+]
+
+
 # RUNNER -----------------------------------------------------------------------------------------
 #
 # Each section is (key, title, checks, prepare, cleanup). prepare and cleanup are either a function or None -- auth needs both, and they are the same function, because deleting the throwaway user is how you both start clean and finish clean.
@@ -260,6 +320,7 @@ AUTH_CHECKS = [
 SECTIONS = [
     ("database", "Database and schema", DATABASE_CHECKS, None, None),
     ("auth", "Registration and login", AUTH_CHECKS, delete_smoke_user, delete_smoke_user),
+    ("browse", "Browsing auctions", BROWSE_CHECKS, None, None),
 ]
 
 

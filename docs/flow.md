@@ -2,7 +2,7 @@
 
 Read this to understand how the pieces fit together before you write code. It covers two things: the order the project was **built**, and the order the code actually **runs**.
 
-Setup instructions are in the [README](../README.md). The file-by-file map is in [overview.md](overview.md). The *why* behind the decisions is in [architecture.md](architecture.md).
+Setup instructions are in the [README](../README.md). The file-by-file map is in [overview.md](overview.md). The *why* behind the decisions is in [architecture.md](architecture.md). (honestly the README.md and this file are the most important, other two are a bunch of AI slop tbh)
 
 ---
 

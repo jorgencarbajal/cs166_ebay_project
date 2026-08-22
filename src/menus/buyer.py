@@ -10,7 +10,7 @@ An action function takes the Session and returns nothing. It calls into the feat
 Adding an action is two steps. Write the function, then add a triple to ACTIONS.
 """
 
-from .. import ui
+from .. import auctions, ui
 
 
 # PLACEHOLDERS ---------------------------------------------------------------------------------
@@ -24,8 +24,27 @@ def _not_built_yet(feature, issue):
     ui.warn(f"{feature} is not built yet -- issue #{issue}.")
 
 
+# THE REFERENCE ACTION ---------------------------------------------------------------------------
+#
+# browse_auctions() is the first real action written, so it is the shape every other one copies. Three lines, three jobs: ask the feature module for data, hand the data to ui, say nothing about SQL. Note what is missing -- there is no try/except here. run_role_menu() in menus/__init__.py wraps every action in one, so an AppError raised anywhere below is already handled.
+
+
 def browse_auctions(session):
-    _not_built_yet("Browsing auctions", 3)
+    # The feature module does the query and returns a list of dicts. If it raised, the lines below never run.
+    rows = auctions.browse(session)
+
+    # Column keys, in display order. ui.page() turns each into a header -- item_name becomes "Item Name" -- and formats the values, so Decimals print as $62.00 and a NULL prints as a dim dash. Pass ("key", "Header") instead of a bare key to override the automatic header.
+    columns = [
+        ("auction_id", "ID"),
+        "item_name",
+        "category",
+        ("starting_price", "Starting"),
+        ("current_highest_bid", "High Bid"),
+        ("seller_login", "Seller"),
+    ]
+
+    # page() prints the table, and if there is more than one screenful it handles [n]ext / [b]ack / [q]uit itself. An empty list prints "Nothing to show." rather than an empty table.
+    ui.page(rows, columns, title="Open auctions")
 
 
 def search_items(session):
