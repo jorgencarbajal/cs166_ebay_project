@@ -103,3 +103,50 @@ def place(session, auction_id, amount):
 
     # The transaction committed when the `with` block closed, and the lock released with it. Returning the RETURNING row rather than a bare True means the menu can confirm with the real id and the real server timestamp -- and it costs nothing, since the INSERT had to go to the database anyway.
     return bid
+
+
+def list_for_buyer(session):
+    """
+    Return every bid this user has placed, newest first, each labelled with how it turned out.
+
+    Read-only, so there is no lock and no transaction to think about -- the opposite of place() in every way. It is also the first query in the project to join three tables: bid holds the amount and the time, auction holds the status and who won, and item holds the name, because "you bid $62 on auction 1" means nothing to a person and "you bid $62 on the Vintage Leather Jacket" means everything.
+
+    No require_role() call. A Seller or an Admin cannot have placed a bid in the first place -- bid.buyer_role is pinned to 'Buyer' by the schema -- so this simply returns an empty list for them rather than refusing outright. Refusing to show someone an empty list would be rude, not secure.
+
+    WHY THE CASE LIVES IN SQL. Each row comes back already labelled Won, Lost, Leading, or Outbid. That label is derived entirely from columns this query has already fetched, so working it out in the database costs nothing extra, keeps the derivation next to the data it derives from, and leaves the menu with nothing to do but print. Recomputing it in Python would mean the same logic could drift out of step with the query feeding it.
+
+    Every bid is listed, not just the most recent per auction. If you bid $50 and later $62 on the same auction, both rows appear -- and your own $50 is honestly labelled Outbid, because it was, by you. That is a real bid history rather than a summary.
+
+    Args:
+        session (auth.Session): the logged-in user. Their login is the only filter.
+
+    Returns:
+        list[dict]: keyed by column name, with an extra "outcome" key holding the label. Empty list if they have never bid, which is a normal answer and not an error.
+    """
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                b.bid_id,
+                b.auction_id,
+                i.item_name,
+                b.bid_amount,
+                a.current_highest_bid,
+                a.auction_status,
+                b.bid_timestamp,
+                CASE
+                    WHEN a.auction_status = 'Closed' AND a.winner_login = b.buyer_login THEN 'Won'
+                    WHEN a.auction_status = 'Closed' THEN 'Lost'
+                    WHEN b.bid_amount = a.current_highest_bid THEN 'Leading'
+                    ELSE 'Outbid'
+                END AS outcome
+            FROM bid b
+            JOIN auction a ON a.auction_id = b.auction_id
+            JOIN item i ON i.item_id = a.item_id
+            WHERE b.buyer_login = %s
+            ORDER BY b.bid_timestamp DESC
+            """,
+            (session.login,),
+        ).fetchall()
+
+    return rows

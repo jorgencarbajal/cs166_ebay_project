@@ -75,7 +75,22 @@ def place_bid(session):
 
 
 def my_bids(session):
-    _not_built_yet("Your bid history", 7)
+    # Same three-line shape as browse_auctions() above: ask the feature module, hand the result to ui, say nothing about SQL.
+    rows = bids.list_for_buyer(session)
+
+    # bid_amount and current_highest_bid sit next to each other on purpose -- seeing "you bid $50, the auction is at $62" side by side explains the Outcome column without anyone having to ask.
+    columns = [
+        ("bid_id", "Bid"),
+        ("auction_id", "Auction"),
+        "item_name",
+        ("bid_amount", "Your Bid"),
+        ("current_highest_bid", "High Bid"),
+        ("outcome", "Outcome"),
+        ("bid_timestamp", "Placed"),
+    ]
+
+    # An empty list is the normal answer for someone who has never bid, and page() prints "Nothing to show." for it rather than an empty table.
+    ui.page(rows, columns, title="Your bids")
 
 
 def pay_for_won_auction(session):
