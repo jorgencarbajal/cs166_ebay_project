@@ -14,6 +14,7 @@ THIS IS THE REFERENCE SLICE. browse() below is the first feature written, so it 
 """
 
 from .db import get_connection
+from .errors import AuctionClosed, NotAuthorized, NotFound
 
 
 def browse(session):
@@ -52,3 +53,95 @@ def browse(session):
 
     # fetchall() returns a list of dicts because db.py sets dict_row as the row factory, so the menu reads row["item_name"] rather than row[1]. An empty list is a normal answer, not an error -- ui.page() prints "Nothing to show." for it.
     return rows
+
+
+def end(session, auction_id):
+    """
+    Close an auction and record whoever was winning it as the winner.
+
+    The second transaction in the project, and it is deliberately built the same way as bids.place() -- lock the auction row first, check the rules against what the lock guarantees is current, then write. Read that function before this one; the reasoning behind the lock is written out there in full and is not repeated here.
+
+    Auctions have no end time anywhere in the schema. The only timestamp in the whole database is bid.bid_timestamp, so nothing expires on its own and no clock closes anything. This function is the only way an auction ever stops being Active, which is why it is the counterpart to place() rather than a footnote to it.
+
+    WHY THE LOCK IS NEEDED HERE TOO. Closing reads the highest bid and then writes a winner based on it. Without the lock, a bid could land in the gap between those two steps and the auction would close naming the wrong person -- the bidder would be told their bid succeeded while the winner column recorded somebody they had just outbid. The lock makes the pair atomic: a bid arriving mid-close waits, then finds the auction Closed and is correctly refused by place()'s own status check.
+
+    Args:
+        session (auth.Session): the logged-in user. Must be the auction's seller, or any Admin.
+        auction_id (int): which auction to close.
+
+    Returns:
+        dict: auction_id, winner_login, and final_price. winner_login is None when nobody bid, and the menu is expected to say so rather than printing an empty name.
+
+    Raises:
+        NotFound: no auction has that id.
+        AuctionClosed: it is already Closed. Closing twice would overwrite a recorded winner, so it is refused rather than silently ignored.
+        NotAuthorized: the caller is neither the seller nor an Admin.
+    """
+    with get_connection() as conn:
+        # No join this time, so a plain FOR UPDATE is enough -- there is only one table in the query and therefore only one row to lock. bids.place() needs FOR UPDATE OF a purely because its query also joins item.
+        # This is the same auction row that place() locks, which is exactly the point: closing an auction and bidding on it are the two operations that must never interleave, and they serialize against each other because they contend for this one row.
+        auction = conn.execute(
+            """
+            SELECT auction_id, seller_login, auction_status, current_highest_bid
+            FROM auction
+            WHERE auction_id = %s
+            FOR UPDATE
+            """,
+            (auction_id,),
+        ).fetchone()
+
+        if auction is None:
+            raise NotFound("auction", auction_id)
+
+        # RULE 1 -- it must still be open. Closing an already-Closed auction would overwrite winner_login, quietly rewriting history for somebody who already won, so this is refused rather than treated as a harmless no-op.
+        if auction["auction_status"] != "Active":
+            raise AuctionClosed(auction_id)
+
+        # RULE 2 -- the seller who owns it, or any Admin. Ownership is checked here rather than with require_role() because it is not a role question: most Sellers are not allowed to close this particular auction either. Admins are included because the spec gives them oversight of every auction, and because it makes the demo possible without logging out and back in.
+        # NotAuthorized called with only an action and no role builds "You are not allowed to close this auction." -- the ownership wording rather than the role wording. See errors.py.
+        if auction["seller_login"] != session.login and session.role != "Admin":
+            raise NotAuthorized("close this auction")
+
+        # Find whoever is winning. current_highest_bid already holds the amount, but not the person, and the winner_login column needs the person -- so the bid table is the only place this can come from.
+        # ORDER BY bid_amount DESC takes the largest. The bid_timestamp ASC tiebreak means that if two bids somehow shared the top amount, the one placed first wins, which is the fair reading. In practice a tie cannot happen, because place() requires each bid to be strictly greater than the last -- the tiebreak is there so the query has one defined answer no matter what is in the table, including rows loaded straight from seed.sql.
+        winner = conn.execute(
+            """
+            SELECT buyer_login, bid_amount
+            FROM bid
+            WHERE auction_id = %s
+            ORDER BY bid_amount DESC, bid_timestamp ASC
+            LIMIT 1
+            """,
+            (auction_id,),
+        ).fetchone()
+
+        # An auction nobody bid on closes with no winner, rather than refusing to close at all. A seller has to be able to withdraw a listing that drew no interest, and NULL is the schema's own way of saying "there isn't one" -- winner_login is nullable precisely so this state can be expressed.
+        # winner_role must be set to NULL alongside it, not left alone. The column is CHECK (winner_role = 'Buyer') with a DEFAULT of 'Buyer', but column defaults only apply to INSERT -- an UPDATE that ignores the column leaves whatever was there before. Setting both to NULL together also satisfies the composite foreign key, which is skipped entirely when any of its columns is NULL.
+        if winner is None:
+            winner_login = None
+            winner_role = None
+            final_price = auction["current_highest_bid"]
+        else:
+            winner_login = winner["buyer_login"]
+            # Spelled out rather than relying on the default, for the same reason bids.place() spells out buyer_role: it is the visible half of the schema's role-pinning trick and worth seeing at the point it is written.
+            winner_role = "Buyer"
+            # Taken from the bid row rather than from current_highest_bid. The two should be identical, and this is the one place worth preferring the bid table -- it is the real record, and current_highest_bid is only a copy of it.
+            final_price = winner["bid_amount"]
+
+        conn.execute(
+            """
+            UPDATE auction
+            SET auction_status = 'Closed',
+                winner_login = %s,
+                winner_role = %s
+            WHERE auction_id = %s
+            """,
+            (winner_login, winner_role, auction_id),
+        )
+
+    # Returned rather than printed, like everything else in this layer. winner_login of None is a real answer that the menu has to word differently, not a failure.
+    return {
+        "auction_id": auction_id,
+        "winner_login": winner_login,
+        "final_price": final_price,
+    }

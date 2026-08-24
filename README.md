@@ -6,22 +6,23 @@ CS166 Project — Phase 3. PostgreSQL backend with a Python terminal client.
 
 ---
 
-## Start here — the documentation
+## Start here
 
-Four documents, each with a distinct job. Read them in this order.
+Three things to read, in this order.
 
-| File | What it is |
+| Where | What it is |
 |---|---|
-| **[docs/overview.md](docs/overview.md)** | **Read this first.** A guided tour of `src/` — what every module is responsible for, what it may import, and how one user action travels from keystroke to database and back. Half an hour here will save you a day of reading files one by one. |
-| [docs/architecture.md](docs/architecture.md) | Why the system is shaped the way it is. Worth reading before you write anything nontrivial — especially §1, which explains four properties of the schema that reading `sql/schema.sql` will not make obvious, and each of which will bite you if you do not know about it. It is also where the final report's design and limitations sections are already half-drafted. |
-| [docs/issues.md](docs/issues.md) | The full task breakdown. **Source of truth for what gets built and in what order** — every GitHub issue came from here. Check it before starting anything, so two of us do not build the same feature twice. |
-| [docs/CS166-Project.pdf](docs/CS166-Project.pdf) | The instructor's specification. Every requirement traces back to §6. |
+| **Your GitHub issue** | **Read this first.** Every task is a numbered issue with an assignee, and each one names the files it touches, the rules it has to enforce, and the exact seed rows to test it against. This is the source of truth for what gets built and in what order — check the board before starting anything, so two of us do not build the same feature twice. |
+| **`src/auctions.py` and `src/bids.py`** | The two worked examples. `auctions.browse()` is the simplest possible feature and is deliberately over-commented as the pattern to copy. `bids.place()` is the hard one — the project's only transaction so far, with row locking and five validation rules — and is the model for any feature that writes. |
+| [docs/flow.md](docs/flow.md) | Build order and run order. What to do first, and what a session looks like end to end. |
 
-This README covers setup and workflow only. It deliberately does not explain the code — that is `overview.md`'s job, and duplicating it here guarantees the two drift apart.
+Ask Jorge for the instructor's specification PDF; it is not in the repo. Every requirement traces back to its §6.
+
+This README covers setup and workflow only. It deliberately does not explain the code — the docstrings do that, and duplicating them here guarantees the two drift apart.
 
 ### Every file explains itself
 
-Each module in `src/` opens with a docstring covering what it is for, which tables it touches, which modules it calls, and which call it. If you are already looking at a file, that paragraph is faster than any document. If you are trying to work out which file to open, start with `overview.md`.
+Each module in `src/` opens with a docstring covering what it is for, which tables it touches, which modules it calls, and which call it. **That is the map** — there is no separate architecture document in the repo, on purpose, because a doc beside the code goes stale and a docstring inside it does not. If you are already looking at a file, that paragraph is faster than any document. If you are trying to work out which file to open, the tree below is the index.
 
 ```
 src/
@@ -77,13 +78,13 @@ Current as of 2026-08-21. See [Important notes](#important-notes) at the bottom 
 
 **Not started.** These files hold a docstring and nothing else: `users.py`, `items.py`, `auctions.py`, `bids.py`, `payments.py`, `shipments.py`. `sql/indexes.sql` is empty on purpose — it is written last, once there is data worth measuring against.
 
-**`sql/seed.sql` holds a small starter dataset** — 7 users, 9 items, 7 auctions, 11 bids, 2 payments, 2 shipments. Every login is predictable (`admin1`, `seller1`, `buyer1`, …) and every password is `pass123`. It exists so no feature is blocked on another feature: there are already auctions to browse, bids to outbid, an unsold listing to auction, a won-but-unpaid auction, and a paid order waiting to ship. The larger dataset issue #17 needs comes later and replaces the rows without changing their shape.
+**`sql/seed.sql` holds a small starter dataset** — 7 users, 9 items, 7 auctions, 11 bids, 2 payments, 2 shipments. Every login is predictable (`admin1`, `seller1`, `buyer1`, …) and every password is `pass123`. It exists so no feature is blocked on another feature: there are already auctions to browse, bids to outbid, an unsold listing to auction, a won-but-unpaid auction, and a paid order waiting to ship. The larger dataset issue #17 needs is a separate file, `sql/bulk_seed.sql`, built under issue #21 — `seed.sql` itself is never edited.
 
-**Next up:** the features themselves, issues #3 onward. Each one is a vertical slice — a feature module plus the menu action that calls it — so three people can take three slices without touching the same file.
+**Next up:** the features themselves. Issues #1, #2, #3 and #7 are done — register, log in, browse open auctions, place a bid, review your bids all work end to end. Each one is a vertical slice — a feature module plus the menu action that calls it — so three people can take three slices without touching the same file.
 
 **How to add a feature.** Write the function in its feature module, then replace the placeholder body in `menus/buyer.py`, `seller.py`, or `admin.py`. You never touch `menus/__init__.py`: it owns the loop, the dispatch, and the `except AppError`, and the role files are nothing but a `TITLE` and a list of `(key, label, function)`.
 
-The map above exists so three people can build against it in parallel without colliding. Claim your work in [docs/issues.md](docs/issues.md) before you start on it.
+The map above exists so three people can build against it in parallel without colliding. Take the issue on GitHub and assign it to yourself before you start, and put `Closes #N` in the pull request — §4 of the spec requires the final report to name who did what, and the issue history is where that comes from.
 
 ---
 

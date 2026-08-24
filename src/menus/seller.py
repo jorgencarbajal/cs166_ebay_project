@@ -8,7 +8,7 @@ Exports TITLE and ACTIONS and nothing else. menus/__init__.py draws the menu, ca
 Owner: this is one of the three role files, split so three people can work without colliding. The feature modules it calls -- items.py, auctions.py -- are the other half of the same slice.
 """
 
-from .. import ui
+from .. import auctions, ui
 from . import buyer
 
 
@@ -34,7 +34,27 @@ def start_auction(session):
 
 
 def end_auction(session):
-    buyer._not_built_yet("Ending an auction", 10)
+    auction_id = ui.prompt_int("Auction id to close", minimum=1)
+
+    # Closing is irreversible -- there is no reopen anywhere in the schema or the spec -- so ask before doing it. This is the only confirm in the project so far, and it is here rather than in auctions.end() because asking a question is a terminal job and the feature modules do not know a terminal exists.
+    # default=False means a bare Enter cancels, which is the safe way round for something that cannot be undone.
+    if not ui.confirm(f"Close auction {auction_id}? This cannot be undone", default=False):
+        ui.blank()
+        ui.info("Cancelled. Nothing was changed.")
+        return
+
+    # Every refusal -- not your auction, already closed, no such auction -- raises out of here and is caught by run_role_menu(). Nothing to handle in this function.
+    result = auctions.end(session, auction_id)
+
+    ui.blank()
+
+    # Two genuinely different outcomes, so they get two different sentences rather than one with a blank in it. winner_login is None when nobody bid, which is a normal way for an auction to end and not a failure worth an error colour.
+    if result["winner_login"] is None:
+        ui.success(f"Auction {auction_id} is closed.")
+        ui.info("Nobody bid on it, so there is no winner. The item is still yours to list again.")
+    else:
+        ui.success(f"Auction {auction_id} is closed. {result['winner_login']} won at ${result['final_price']:,.2f}.")
+        ui.info("They can now pay for it from their own menu.")
 
 
 def mark_shipped(session):
