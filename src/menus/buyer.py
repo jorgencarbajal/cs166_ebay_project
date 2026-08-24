@@ -10,7 +10,9 @@ An action function takes the Session and returns nothing. It calls into the feat
 Adding an action is two steps. Write the function, then add a triple to ACTIONS.
 """
 
-from .. import auctions, ui
+from decimal import Decimal
+
+from .. import auctions, bids, ui
 
 
 # PLACEHOLDERS ---------------------------------------------------------------------------------
@@ -56,7 +58,20 @@ def view_auction(session):
 
 
 def place_bid(session):
-    _not_built_yet("Placing a bid", 7)
+    # Ask which auction first. minimum=1 rejects 0 and negative ids in ui.prompt_int() before a pointless query goes out, and prompt_int() re-asks on its own if someone types letters, so nothing here has to handle bad input.
+    auction_id = ui.prompt_int("Auction id", minimum=1)
+
+    # Then the money. prompt_decimal() strips a leading $ or any commas, rounds to two places to match NUMERIC(10,2), and hands back a Decimal -- so bids.place() never sees a float and never sees a string.
+    # minimum is one cent rather than zero because the schema has CHECK (bid_amount > 0) and a $0.00 bid would come back as a raw psycopg error instead of a sentence. This is only a floor on the number itself; whether it actually beats the auction is bids.place()'s job, since only it knows the starting price and the current high bid.
+    amount = ui.prompt_decimal("Your bid", minimum=Decimal("0.01"))
+
+    # The whole feature in one line. Every rule -- closed auction, bidding on your own listing, an amount that does not clear both floors -- raises from in there, and run_role_menu() catches it and prints it in red. That is why there is no try/except in this function.
+    bid = bids.place(session, auction_id, amount)
+
+    # Only reached if the bid was actually written. bid_id and bid_timestamp came back from the INSERT's RETURNING clause, so these are the database's real values rather than anything guessed on this side.
+    ui.blank()
+    ui.success(f"Bid #{bid['bid_id']} placed on auction {auction_id} for ${bid['bid_amount']:,.2f}.")
+    ui.info("You are the highest bidder until someone outbids you.")
 
 
 def my_bids(session):
