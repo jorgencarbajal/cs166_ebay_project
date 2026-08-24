@@ -1,3 +1,9 @@
+CLAUDE.md
+docs/architecture.md
+docs/issues.md
+docs/overview.md
+docs/CS166-Project.pdf
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
@@ -216,4 +222,3 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
-CLAUDE.md
