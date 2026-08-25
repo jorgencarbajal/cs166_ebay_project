@@ -55,6 +55,80 @@ def browse(session):
     return rows
 
 
+def search(session, name=None, category=None, min_price=None, max_price=None, include_closed=False):
+    """
+    Return auctions matching whichever filters were actually supplied.
+
+    The only query in the project whose WHERE clause is assembled at runtime, because the user chooses which filters to apply and an unused filter must not appear in the SQL at all. A fixed WHERE with `(%s IS NULL OR i.category = %s)` for every field would work, but it hides the real selectivity from the planner and makes the EXPLAIN output in issue #17 much harder to read.
+
+    HOW THE CLAUSE IS BUILT SAFELY -- this is the part worth reading. Two lists are grown side by side: `conditions` holds SQL fragments, and every fragment contains a %s placeholder rather than a value; `params` holds the values themselves, in the same order. At the end the fragments are joined with " AND " and dropped into the query, while the values go to psycopg as a separate argument.
+
+    So the f-string below interpolates only strings this function wrote itself. **No value typed by a user is ever formatted into the SQL text.** That distinction is the whole of SQL injection: a login of `'; DROP TABLE users; --` passed as a parameter is just a harmless string that matches nothing, but the same text pasted into the query would be executed. If a future filter is added here, it must follow the same shape -- append a fragment containing %s to one list, append the value to the other, never build a fragment out of user input.
+
+    Args:
+        session (auth.Session): the logged-in user. Not used in the query.
+        name (str | None): matched as a case-insensitive substring, so "jacket" finds "Vintage Leather Jacket". Empty string and None both mean "do not filter on this".
+        category (str | None): matched case-insensitively but in full, since categories are a small fixed vocabulary rather than free text.
+        min_price (Decimal | None): lower bound on the item's starting price.
+        max_price (Decimal | None): upper bound on the item's starting price.
+        include_closed (bool): False, the default, restricts results to Active auctions, matching what browse() shows. True searches every auction regardless of status, which is the only way to find a Closed one.
+
+    Returns:
+        list[dict]: the same column shape browse() returns, plus auction_status, so one ui.page() column list works for both. Empty list when nothing matches, which is a normal answer.
+    """
+    conditions = []
+    params = []
+
+    # The status filter is not a user-supplied value, so it is written straight into the fragment as a literal rather than parameterized. This is the default because a buyer searching for something to bid on wants things they can still bid on, which is the same reason browse() only shows Active.
+    if not include_closed:
+        conditions.append("a.auction_status = 'Active'")
+
+    # `if name` is false for both None and "" -- ui.prompt(required=False) returns an empty string for a skipped field, so both spellings of "no filter" are handled by one check.
+    if name:
+        # ILIKE is Postgres's case-insensitive LIKE. The % wildcards go around the value in Python, NOT in the SQL, so the parameter is the finished pattern -- and because it is still a parameter, a user typing a % of their own is treated as their own wildcard rather than as anything dangerous.
+        # Worth knowing for issue #17: a leading-wildcard pattern like '%jacket%' cannot use an ordinary B-tree index, because a B-tree can only seek on a known prefix. This query is therefore a sequential scan no matter what index exists on item_name, which makes it an honest and interesting case to show during the tuning section rather than a failure.
+        conditions.append("i.item_name ILIKE %s")
+        params.append(f"%{name}%")
+
+    if category:
+        # No wildcards, so this is an exact match that ignores case -- "books", "Books" and "BOOKS" all find the Books category. Categories come from a short fixed list, so substring matching would only create surprises.
+        conditions.append("i.category ILIKE %s")
+        params.append(category)
+
+    # `is not None` rather than a plain truth test, because Decimal("0.00") is falsy and a search for items starting at or above $0.00 is a perfectly reasonable thing to ask for.
+    if min_price is not None:
+        conditions.append("i.starting_price >= %s")
+        params.append(min_price)
+
+    if max_price is not None:
+        conditions.append("i.starting_price <= %s")
+        params.append(max_price)
+
+    # Every filter can be skipped, including the status one, in which case there is nothing to put after WHERE. TRUE is a valid condition that matches every row, which keeps the query one shape instead of two and avoids building the word WHERE conditionally.
+    where = " AND ".join(conditions) if conditions else "TRUE"
+
+    with get_connection() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT
+                a.auction_id,
+                i.item_name,
+                i.category,
+                i.starting_price,
+                a.current_highest_bid,
+                a.auction_status,
+                a.seller_login
+            FROM auction a
+            JOIN item i ON i.item_id = a.item_id
+            WHERE {where}
+            ORDER BY a.auction_id DESC
+            """,
+            params,
+        ).fetchall()
+
+    return rows
+
+
 def detail(session, auction_id):
     """
     Return everything known about one auction, as a single row.

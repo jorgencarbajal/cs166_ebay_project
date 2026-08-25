@@ -50,7 +50,48 @@ def browse_auctions(session):
 
 
 def search_items(session):
-    _not_built_yet("Searching for items", 4)
+    ui.blank()
+    ui.info("Leave a field blank to skip it. Blank everything to list every open auction.")
+    ui.blank()
+
+    # required=False is what makes a field skippable -- ui.prompt() returns "" instead of re-asking, and auctions.search() treats "" the same as None.
+    # max_length matches the schema so a 300-character search string is refused here with a readable message rather than being sent to the database. item_name is VARCHAR(100) and category is VARCHAR(50).
+    name = ui.prompt("Item name contains", required=False, max_length=100)
+    category = ui.prompt("Category", required=False, max_length=50)
+
+    # Money needs a different approach to the text fields above. ui.prompt_decimal() has no required=False, deliberately -- it is the one place text becomes money and letting it return "" would push that conversion out into every caller. So the price filter is opted into with a yes/no question instead, and both bounds are asked for only if the answer is yes.
+    min_price = None
+    max_price = None
+
+    if ui.confirm("Filter by starting price?", default=False):
+        min_price = ui.prompt_decimal("Lowest starting price", minimum=Decimal("0.00"))
+        # The lower bound becomes the floor for the upper one, so "between $100 and $50" cannot be entered at all. Catching it in the prompt is better than accepting it and returning an empty result the user has to work out the reason for.
+        max_price = ui.prompt_decimal("Highest starting price", minimum=min_price)
+
+    # Closed auctions are excluded by default, matching browse(). This is the only way to find one, which matters for showing a completed sale during the demo.
+    include_closed = ui.confirm("Include closed auctions?", default=False)
+
+    rows = auctions.search(
+        session,
+        name=name,
+        category=category,
+        min_price=min_price,
+        max_price=max_price,
+        include_closed=include_closed,
+    )
+
+    # One extra column over browse_auctions() -- status, which is only interesting once closed auctions can appear in the results.
+    columns = [
+        ("auction_id", "ID"),
+        "item_name",
+        "category",
+        ("starting_price", "Starting"),
+        ("current_highest_bid", "High Bid"),
+        ("auction_status", "Status"),
+        ("seller_login", "Seller"),
+    ]
+
+    ui.page(rows, columns, title=f"Search results ({len(rows)} found)")
 
 
 def view_auction(session):
