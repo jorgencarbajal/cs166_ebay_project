@@ -60,7 +60,6 @@ def check_database():
 
 def main():
     ui.blank()
-    ui.heading("Online Auction and Bidding System")
 
     if not check_database():
         # Non-zero tells the shell this did not work, which matters if anyone ever runs this from a script.
