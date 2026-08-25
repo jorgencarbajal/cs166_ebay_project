@@ -1,42 +1,24 @@
--- sql/tuning_queries.sql -- the measurement harness for issue #17.
---
--- NOT part of the build. scripts/load_db.py never runs this; it is run by hand, twice, to produce the before-and-after numbers that the physical design section of the report is made of.
---
 -- HOW TO TAKE THE MEASUREMENT
 --
---   1 / Load the bulk data with no indexes:
---         .venv/bin/python scripts/load_db.py --yes --bulk --skip-indexes
+-- 1. Load the bulk data with no indexes:
+--    uv run scripts/load_db.py --yes --bulk --skip-indexes
 --
---   2 / Capture the "before" run:
---         cs166_psql -d jcarb044_DB -f sql/tuning_queries.sql > docs/tuning_before.txt
+-- 2. Capture the "before" run:
+--    cs166_psql -d jcarb044_DB -f sql/tuning_queries.sql > docs/tuning_before.txt
 --
---   3 / Build the indexes:
---         cs166_psql -d jcarb044_DB -f sql/indexes.sql
+-- 3. Build the indexes:
+--    cs166_psql -d jcarb044_DB -f sql/indexes.sql
 --
---   4 / Capture the "after" run:
---         cs166_psql -d jcarb044_DB -f sql/tuning_queries.sql > docs/tuning_after.txt
+-- 4. Capture the "after" run:
+--    cs166_psql -d jcarb044_DB -f sql/tuning_queries.sql > docs/tuning_after.txt
 --
---   5 / Put the demo dataset back before doing anything else:
---         .venv/bin/python scripts/load_db.py --yes
---
--- Step 5 matters. Leaving the bulk data loaded means browse shows four and a half thousand auctions during the demo.
---
--- READING THE OUTPUT. EXPLAIN ANALYZE actually runs the query and reports what happened, so every number is measured rather than estimated. Four things are worth pulling out of each plan:
---
---   Seq Scan vs Index Scan     which access method the planner chose. This is the headline.
---   rows=N ... actual rows=N   the estimate against reality. A large gap means the statistics are stale -- run ANALYZE.
---   Sort                       a sort node that disappears after indexing is a real win, because the index delivered the order for free.
---   Execution Time             the number for the report. Run each query more than once and take a later run; the first touches cold cache and is not representative.
---
--- Each query below is preceded by a comment naming the application function it comes from, so the report can say which feature got faster rather than just quoting SQL.
-
+-- 5. Put the demo dataset back before doing anything else:
+--    uv run scripts/load_db.py --yes
 
 \timing on
 
 
--- 1. bids.history() -- the bid history under the auction detail screen ------------------------------
---
--- The single best demonstration in the set. Before indexing this is a full scan of every bid in the database followed by a sort; afterwards it should be an index scan with no sort node at all, because idx_bid_auction_amount stores the rows in exactly the order asked for.
+-- 1. bids.history() -- 
 
 EXPLAIN (ANALYZE, BUFFERS)
 SELECT bid_id, buyer_login, bid_amount, bid_timestamp
@@ -45,9 +27,7 @@ WHERE auction_id = 500
 ORDER BY bid_amount DESC;
 
 
--- 2. bids.list_for_buyer() -- "your bids" ------------------------------------------------------------
---
--- Three-table join filtered by one buyer. Watch bid go from a sequential scan to an index scan on idx_bid_buyer.
+-- 2. bids.list_for_buyer() --
 
 EXPLAIN (ANALYZE, BUFFERS)
 SELECT
@@ -71,9 +51,7 @@ WHERE b.buyer_login = 'bulkbuyer0042'
 ORDER BY b.bid_timestamp DESC;
 
 
--- 3. auctions.browse() -- every open auction ---------------------------------------------------------
---
--- The partial index idx_auction_active is the one being tested here. Two-value columns are exactly where the planner may decide a sequential scan is cheaper, so this query is as likely to show no improvement as a large one. Report whichever happens.
+-- 3. auctions.browse() --
 
 EXPLAIN (ANALYZE, BUFFERS)
 SELECT
@@ -89,9 +67,7 @@ WHERE a.auction_status = 'Active'
 ORDER BY a.auction_id DESC;
 
 
--- 4. auctions.search() -- category plus a price range ------------------------------------------------
---
--- Two indexes are candidates at once, idx_item_category and idx_item_starting_price, and PostgreSQL will pick one rather than both unless it decides a bitmap combination is worthwhile. A BitmapAnd node in the plan means it used both, which is worth pointing at if it appears.
+-- 4. auctions.search() --
 
 EXPLAIN (ANALYZE, BUFFERS)
 SELECT
@@ -111,9 +87,7 @@ WHERE a.auction_status = 'Active'
 ORDER BY a.auction_id DESC;
 
 
--- 5. auctions.search() by name -- THE ONE THAT DOES NOT IMPROVE ---------------------------------------
---
--- Included deliberately. ILIKE '%term%' has a leading wildcard, so no B-tree can serve it and this stays a sequential scan before and after. Showing a query that indexing cannot help is what makes the rest of the numbers credible, and the explanation -- a B-tree is sorted by the start of the string, and this pattern does not know its own start -- is a good thing to have ready.
+-- 5. auctions.search() by name --
 
 EXPLAIN (ANALYZE, BUFFERS)
 SELECT a.auction_id, i.item_name, i.category, i.starting_price
@@ -123,9 +97,7 @@ WHERE a.auction_status = 'Active'
   AND i.item_name ILIKE '%Item 3%';
 
 
--- 6. reports.top_bidders() -----------------------------------------------------------------------------
---
--- The heaviest query in the application: a LEFT JOIN over the whole bid table, grouped, with a correlated subquery that runs once per Buyer. With 400 buyers and no index on auction.winner_login, that subquery alone is 400 sequential scans.
+-- 6. reports.top_bidders() --
 
 EXPLAIN (ANALYZE, BUFFERS)
 SELECT
@@ -142,7 +114,7 @@ GROUP BY u.login, u.favorite_category
 ORDER BY bids_placed DESC, highest_bid DESC NULLS LAST;
 
 
--- 7. reports.revenue_by_category() ----------------------------------------------------------------------
+-- 7. reports.revenue_by_category() --
 
 EXPLAIN (ANALYZE, BUFFERS)
 SELECT
@@ -160,9 +132,7 @@ HAVING SUM(a.current_highest_bid) > 0
 ORDER BY revenue DESC;
 
 
--- 8. reports.unpaid_wins() -- the anti-join ---------------------------------------------------------------
---
--- Expected to be fast in both runs, because payment.auction_id is UNIQUE and therefore already indexed by the schema itself. That is the point of including it: a query that was already fast is not evidence an index helped, and knowing which measurements are uninformative is part of reading them honestly.
+-- 8. reports.unpaid_wins() --
 
 EXPLAIN (ANALYZE, BUFFERS)
 SELECT
@@ -181,9 +151,7 @@ WHERE a.auction_status = 'Closed'
 ORDER BY a.current_highest_bid DESC;
 
 
--- 9. reports.active_auctions() ------------------------------------------------------------------------------
---
--- A LEFT JOIN from every Active auction into the whole bid table, then grouped. This is where idx_bid_auction_amount should show its largest absolute saving, because the join has thousands of auctions to satisfy rather than one.
+-- 9. reports.active_auctions() --
 
 EXPLAIN (ANALYZE, BUFFERS)
 SELECT
@@ -209,11 +177,7 @@ GROUP BY
 ORDER BY a.current_highest_bid DESC, bids_placed DESC;
 
 
--- 10. HOW BIG IS ALL OF THIS ANYWAY -------------------------------------------------------------------------
---
--- Indexes are not free: they cost disk and they slow every INSERT, because each write has to update every index on the table. The report should say what was paid, not only what was gained -- and on this server that matters more than usual, since $PGDATA sits on a filesystem that is essentially full.
---
--- Returns nothing before the indexes exist, which is itself the "before" measurement.
+-- 10. HOW BIG IS ALL OF THIS ANYWAY --
 
 SELECT
     indexname,
