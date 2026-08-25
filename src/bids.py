@@ -105,6 +105,42 @@ def place(session, auction_id, amount):
     return bid
 
 
+def history(session, auction_id):
+    """
+    Return every bid placed on one auction, highest first.
+
+    Feeds the auction detail screen in issue #5, sitting underneath auctions.detail(). Read-only, unrestricted -- bid history is public, the same way it is on any real auction site, and hiding it would make the current high bid impossible to interpret.
+
+    ORDER BY bid_amount DESC is both the leaderboard order and the chronological order at once, which is worth understanding rather than assuming. place() requires every bid to be strictly greater than the current highest, so within a single auction each new bid is larger than every bid before it -- amount and time increase together and sorting by either gives the same sequence. The amount is sorted on rather than the timestamp because it is the column the ordering actually means something about, and because it stays correct even for rows loaded straight from seed.sql, which were never checked by place().
+
+    No join to item or auction. The screen above this table has already printed what the item is; repeating it on all eleven rows would be noise.
+
+    Args:
+        session (auth.Session): the logged-in user. Not used in the query.
+        auction_id (int): which auction's bids to return.
+
+    Returns:
+        list[dict]: bid_id, buyer_login, bid_amount, bid_timestamp. Empty list if nobody has bid, which is a normal answer -- see auction 3 in seed.sql.
+    """
+    with get_connection() as conn:
+        # No NotFound check for a missing auction. The menu calls auctions.detail() first and that raises on a bad id, so by the time this runs the auction is known to exist -- and an auction that exists with no bids has to return an empty list anyway, which is indistinguishable from what a bad id would produce here.
+        rows = conn.execute(
+            """
+            SELECT
+                bid_id,
+                buyer_login,
+                bid_amount,
+                bid_timestamp
+            FROM bid
+            WHERE auction_id = %s
+            ORDER BY bid_amount DESC
+            """,
+            (auction_id,),
+        ).fetchall()
+
+    return rows
+
+
 def list_for_buyer(session):
     """
     Return every bid this user has placed, newest first, each labelled with how it turned out.

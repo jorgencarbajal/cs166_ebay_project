@@ -54,7 +54,53 @@ def search_items(session):
 
 
 def view_auction(session):
-    _not_built_yet("Auction detail and bid history", 5)
+    auction_id = ui.prompt_int("Auction id", minimum=1)
+
+    # detail() raises NotFound on a bad id, so nothing below runs for one. That is also why it is called before history() -- it is the call that validates the id for both.
+    a = auctions.detail(session, auction_id)
+    bid_rows = bids.history(session, auction_id)
+
+    ui.blank()
+    ui.heading(f"{a['item_name']}  (auction {a['auction_id']})")
+
+    # One record printed down the screen as labelled lines rather than across it as a table. A table needs its columns to line up across many rows, which is exactly wrong for a single row with twelve fields -- it would run off the side of any terminal.
+    # ljust() pads each label out to the same width so the values form a straight column. The width is one wider than the longest label below, which leaves a single space of gap.
+    def field(label, value):
+        ui.info(f"{(label + ':').ljust(16)}{value}")
+
+    field("Category", a["category"])
+    field("Condition", a["item_condition"] or "not stated")
+    field("Seller", a["seller_login"])
+    field("Status", a["auction_status"])
+    field("Starting price", f"${a['starting_price']:,.2f}")
+
+    # A fresh auction shows current_highest_bid as 0.00, which on screen reads as "somebody bid nothing" rather than "nobody bid". Saying so in words is clearer, and it is the same distinction that trips people up in bids.place() -- 0.00 is the column default, not a real bid.
+    if a["bid_count"] == 0:
+        field("Highest bid", "no bids yet")
+    else:
+        field("Highest bid", f"${a['current_highest_bid']:,.2f}  ({a['bid_count']} bids)")
+
+    # Only meaningful once the auction is Closed, and only then if somebody actually bid -- auctions.end() records NULL for an auction nobody wanted.
+    if a["auction_status"] == "Closed":
+        field("Winner", a["winner_login"] or "nobody bid")
+
+    # description is TEXT and can be long, so it goes last and on its own line rather than in the aligned block, where a long value would wrap under the labels and break the column.
+    if a["description"]:
+        ui.blank()
+        ui.info(a["description"])
+
+    # page() rather than table() so a heavily bid auction pages instead of scrolling away. An empty list prints "Nothing to show." which is the right answer for an auction nobody has bid on.
+    ui.blank()
+    ui.page(
+        bid_rows,
+        [
+            ("bid_id", "Bid"),
+            ("buyer_login", "Bidder"),
+            ("bid_amount", "Amount"),
+            ("bid_timestamp", "Placed"),
+        ],
+        title="Bid history",
+    )
 
 
 def place_bid(session):

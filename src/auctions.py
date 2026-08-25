@@ -55,6 +55,56 @@ def browse(session):
     return rows
 
 
+def detail(session, auction_id):
+    """
+    Return everything known about one auction, as a single row.
+
+    Read-only and unrestricted -- anyone logged in may look at any auction, open or closed, exactly as browse() lets anyone see the open ones. There is no require_role() and no ownership check.
+
+    This is the one query in the project that is deliberately wide. Every other SELECT returns only the columns a table on screen needs, because a table with fifteen columns is unreadable in a terminal. A detail view is the opposite situation -- one record, printed down the screen as labelled lines, so the description and the condition are worth fetching here and nowhere else.
+
+    The bid_count column is a scalar subquery: a SELECT nested inside the column list that returns exactly one value per outer row. It is used instead of a JOIN to bid with a GROUP BY, because joining would multiply the auction row by the number of bids and force everything else into an aggregate to collapse it again. A subquery counts without disturbing the shape of the result.
+
+    Args:
+        session (auth.Session): the logged-in user. Not used in the query -- every feature function takes one so the signature is uniform.
+        auction_id (int): which auction.
+
+    Returns:
+        dict: one row, keyed by column name. winner_login is None unless the auction is Closed and somebody bid.
+
+    Raises:
+        NotFound: no auction has that id.
+    """
+    with get_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT
+                a.auction_id,
+                a.auction_status,
+                a.current_highest_bid,
+                a.seller_login,
+                a.winner_login,
+                i.item_id,
+                i.item_name,
+                i.category,
+                i.starting_price,
+                i.item_condition,
+                i.description,
+                (SELECT COUNT(*) FROM bid b WHERE b.auction_id = a.auction_id) AS bid_count
+            FROM auction a
+            JOIN item i ON i.item_id = a.item_id
+            WHERE a.auction_id = %s
+            """,
+            (auction_id,),
+        ).fetchone()
+
+    # Unlike browse(), an empty result here is a real failure rather than a normal answer. Browse asks "what is open" and nothing being open is fine; this asks for one specific auction by id, so not finding it means the id was wrong.
+    if row is None:
+        raise NotFound("auction", auction_id)
+
+    return row
+
+
 def end(session, auction_id):
     """
     Close an auction and record whoever was winning it as the winner.
