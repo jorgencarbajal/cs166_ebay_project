@@ -7,7 +7,6 @@ cs166_db_start
 # load the light demo data
 uv run scripts/load_db.py --yes --skip-indexes
 
-
 # DURING THE DEMO
 
 # run the report sql (Top Bidders)
