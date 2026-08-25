@@ -174,8 +174,8 @@ def page(rows, columns, title=None, page_size=10):
         table(chunk, columns, title=f"{caption}({start + 1}-{start + len(chunk)} of {len(rows)})")
 
         # One page means there is nothing to navigate, so do not make them press a key to leave.
-        if total_pages == 1:
-            return
+        # if total_pages == 1:
+        #     return
 
         # Build the list of moves that are actually available, so "next" is not offered on the last page.
         choices = []
