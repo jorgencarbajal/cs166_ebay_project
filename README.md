@@ -1,442 +1,93 @@
-# Online Auction and Bidding System
+# CS166 - Phase 3: eBay Project
 
-CS166 Project — Phase 3. PostgreSQL backend with a Python terminal client.
+1. Overview
 
-**Everything runs on the UCR CS server.** There is no local database and no SSH tunnel. You may edit code on your own machine if you prefer, but the application and Postgres both live on the server, and that is where the code is run and demoed.
 
----
+Our project delivers a terminal-based “eBay” project. It is built using Python, PostgreSQL, and Rich. This project models real-world e-commerce operations including authentication, multi-role interfaces (buyer, seller, etc.), bidding, payment handling, and order fulfillment.
 
-## Start here
 
-Three things to read, in this order.
 
-| Where | What it is |
-|---|---|
-| **Your GitHub issue** | **Read this first.** Every task is a numbered issue with an assignee, and each one names the files it touches, the rules it has to enforce, and the exact seed rows to test it against. This is the source of truth for what gets built and in what order — check the board before starting anything, so two of us do not build the same feature twice. |
-| **`src/auctions.py` and `src/bids.py`** | The two worked examples. `auctions.browse()` is the simplest possible feature and is deliberately over-commented as the pattern to copy. `bids.place()` is the hard one — the project's only transaction so far, with row locking and five validation rules — and is the model for any feature that writes. |
-| [docs/flow.md](docs/flow.md) | Build order and run order. What to do first, and what a session looks like end to end. |
+Key system features and structural highlights include:
+- Role-Based Access & Security: Enforces distinct workflows for Buyers, Sellers, and Admins using Session state management and explicit require_role() authorization gates.
+- Database Architecture & Custom Extensions: Houses data across six core tables (users, item, auction, bid, payment, and shipment). Uses custom sequences and RETURNING clauses for primary key generation across numeric entities.
+- Transactional Integrity: Enforces row-level locking (FOR UPDATE) and transaction semantics on critical operations like bid placement to maintain consistent state across concurrent user actions.
+- Modular Codebase: Separates backend execution, custom exceptions (src/errors.py), database handling (src/db.py), interactive UI styling (src/ui.py), and role-specific action menus under src/menus/.
+- Reproducible Deployment: Managed via uv package synchronization and scripted database builds (scripts/load_db.py) using raw SQL schemas, extensions, and seed data.
 
-Ask Jorge for the instructor's specification PDF; it is not in the repo. Every requirement traces back to its §6.
 
-This README covers setup and workflow only. It deliberately does not explain the code — the docstrings do that, and duplicating them here guarantees the two drift apart.
 
-### Every file explains itself
+2. Implemented Functions
 
-Each module in `src/` opens with a docstring covering what it is for, which tables it touches, which modules it calls, and which call it. **That is the map** — there is no separate architecture document in the repo, on purpose, because a doc beside the code goes stale and a docstring inside it does not. If you are already looking at a file, that paragraph is faster than any document. If you are trying to work out which file to open, the tree below is the index.
 
-```
-src/
-  db.py            connections only — reads .env, hands out psycopg connections
-  errors.py        the exception vocabulary every module raises from
-  ui.py            the only module that imports rich
+Authentication & Session Management (src/auth.py)
+- register(login, password, name, email): Registers a new user account in the users table with default role Buyer
+- login(login, password): Authenticates credentials against the database and initializes an active Session state
+- require_role(allowed_roles): Authorization decorator/gate verifying that the current active session possesses the required permission level before executing sensitive menu options
 
-  auth.py          register, log in, the Session object, and require_role()
-  users.py         profiles, admin user management, role changes
-  items.py         listings
-  auctions.py      browse, search, detail, ending an auction
-  bids.py          placing bids and bid history
-  payments.py      paying for a won auction
-  shipments.py     delivery after payment
 
-  menus/
-    __init__.py    login gate, then dispatch on role
-    buyer.py
-    seller.py
-    admin.py
+Auctions & Browsing (src/auctions.py)
+- browse_open_auctions(): Queries active listings in the auction table joined with item metadata, featuring built-in terminal pagination
+- search_auctions(keyword): Filters active auctions matching a given search term across item titles or descriptions
+- get_auction_details(auction_id): Fetches complete state for a specific auction, including current highest bid, seller information, and end time
+- end_auction(auction_id): Closes an expired auction, determines the winning bid, and triggers the creation of payment/shipment obligations
 
-sql/
-  schema.sql       the instructor's schema, verbatim — never edited
-  extensions.sql   ours: sequences, so the ids generate themselves
-  seed.sql         ours: sample data (written last, currently empty)
-  indexes.sql      ours: tuning indexes (written last, currently empty)
 
-scripts/
-  load_db.py       run by hand — builds the database from the files above (destructive)
-  ui_demo.py       run by hand — previews the interface, needs no database
-```
+Bidding Operations (src/bids.py)
+- place_bid(auction_id, buyer_login, bid_amount): Executes a bid placement within a single transaction using explicit FOR UPDATE row-level locks on the target auction to prevent race conditions. Enforces five core validation rules (e.g., bid > current high, active auction status, non-seller bid)
+- get_bid_history(buyer_login): Retrieves all historical bids placed by the specified buyer along with auction outcomes
 
-## Project status
 
-Current as of 2026-08-21. See [Important notes](#important-notes) at the bottom for the two decisions that affect how you write code.
+Items & Listings (src/items.py)
+- create_listing(seller_login, title, description, starting_price): Creates an item entry and opens a corresponding record in auction
 
-**Built, tested, and on `main`:**
 
-| File | State |
-|---|---|
-| `src/db.py` | Connections only. Reads `.env`, hands out psycopg connections. |
-| `src/errors.py` | The 15 exception classes every feature module raises from. |
-| `src/ui.py` | The full terminal helper set — messages, headings, tables, pagination, menus, prompts, confirmations. The only module that imports `rich`. |
-| `src/auth.py` | `Session`, `require_role()`, `register()`, `login()`. New accounts are always Buyer, straight from the schema default. |
-| `src/menus/__init__.py` | The login gate, the role dispatch, and the one generic menu loop the three role files run on. |
-| `src/menus/{buyer,seller,admin}.py` | Menu structure complete — every action is listed and reachable. The action *bodies* are placeholders naming the issue that will replace them. |
-| `main.py` | Checks the database is reachable, then hands off to `menus.run()`. |
-| `scripts/load_db.py` | Builds the database from the `sql/` files in one transaction. See [1.10](#110--build-the-database). |
-| `scripts/ui_demo.py` | Previews the whole interface with fake data and no database — `--all` runs every section, `--static` skips the interactive ones. |
-| `sql/schema.sql`, `sql/extensions.sql` | Both loaded on the server. Six tables and five sequences exist; the tables are still empty. |
+Fulfillment & Payments (src/payments.py, src/shipments.py)
 
-**The application runs.** `.venv/bin/python main.py` gets you: register → log in → your role's menu → log out → quit. Every action is on the menu; the ones whose feature module isn't written yet say so and name their issue.
 
-**Not started.** These files hold a docstring and nothing else: `users.py`, `items.py`, `auctions.py`, `bids.py`, `payments.py`, `shipments.py`. `sql/indexes.sql` is empty on purpose — it is written last, once there is data worth measuring against.
+- process_payment(auction_id, buyer_login, payment_details): Records a transaction payment entry upon winning an auction
+- create_shipment(payment_id, tracking_info): Generates fulfillment tracking details for paid orders
 
-**`sql/seed.sql` holds a small starter dataset** — 7 users, 9 items, 7 auctions, 11 bids, 2 payments, 2 shipments. Every login is predictable (`admin1`, `seller1`, `buyer1`, …) and every password is `pass123`. It exists so no feature is blocked on another feature: there are already auctions to browse, bids to outbid, an unsold listing to auction, a won-but-unpaid auction, and a paid order waiting to ship. The larger dataset issue #17 needs is a separate file, `sql/bulk_seed.sql`, built under issue #21 — `seed.sql` itself is never edited.
 
-**Next up:** the features themselves. Issues #1, #2, #3 and #7 are done — register, log in, browse open auctions, place a bid, review your bids all work end to end. Each one is a vertical slice — a feature module plus the menu action that calls it — so three people can take three slices without touching the same file.
+User & Admin Operations (src/users.py & src/reports.py)
 
-**How to add a feature.** Write the function in its feature module, then replace the placeholder body in `menus/buyer.py`, `seller.py`, or `admin.py`. You never touch `menus/__init__.py`: it owns the loop, the dispatch, and the `except AppError`, and the role files are nothing but a `TITLE` and a list of `(key, label, function)`.
 
-The map above exists so three people can build against it in parallel without colliding. Take the issue on GitHub and assign it to yourself before you start, and put `Closes #N` in the pull request — §4 of the spec requires the final report to name who did what, and the issue history is where that comes from.
+- update_profile(login, details): Updates user profile information
+- change_user_role(target_login, new_role): Admin-only action to elevate or adjust access privileges across Buyer, Seller, or Admin
+- top_bidders(session): Admin-only, returns every Buyer and how much bidding they have done
+- revenue_by_category(session): Admin-only, returns each category that has sold at least one item and its corresponding revenue
+- unpaid_wins(session): Admin-only, returns a list of auctions that were won but never paid for
+- active_auctions(session): Admin-only, returns every open auction and its corresponding bidding activity
 
----
+3. Screenshots
+Browse open auctions:
+![Browse open auctions] (<Screenshot 2026-08-27 182244.png>)
 
-## Part 1 — One-time server setup
 
-Do this section once. After it is done, see [Part 2](#part-2--every-session) for the short daily routine.
+View an auction in detail:
+![View an auction in detail] (<Screenshot 2026-08-27 182309.png>)
 
-Every command in Part 1 is run **on the server**, unless a step says otherwise.
 
-### 1.1 — Log in to the server
+Closing one of your auctions:
+![Closing one of your auctions] (<Screenshot 2026-08-27 182701.png>)
 
-```bash
-ssh <your-netid>@cs166.cs.ucr.edu
-```
 
-`cs166.cs.ucr.edu` and `xe-10.cs.ucr.edu` are the same physical machine — your shell prompt will say `xe-10`. Don't be thrown by that.
+Top bidders:
+![Top bidders] (<Screenshot 2026-08-27 182021-1.png>)
 
-**Why:** All the work happens here, so every step below assumes you are logged in.
 
-### 1.2 — Start your Postgres instance
+Revenue by category:
+![Revenue by category] (<Screenshot 2026-08-27 182146.png>)
 
-Each of us runs our **own private** Postgres instance. Check whether yours is up, and start it if not:
 
-```bash
-cs166_db_status     # is it running?
-cs166_db_start      # start it if not
-```
+Won but unpaid:
+![Won but unpaid] (<Screenshot 2026-08-27 182200.png>)
 
-**Why this matters more than it looks:** Your Postgres is a plain user process that you launched — not a system service. Nothing restarts it for you. It dies when the server reboots, and the department may reap idle user processes. So `cs166_db_status` is the first thing to check whenever the application cannot connect. Roughly 90% of "my code is broken" turns out to be "my database isn't running."
 
-Useful facts about your instance:
+Active auctions by high bid:
+![Active auctions by high bid] (<Screenshot 2026-08-27 182213.png>)
 
-- Its port is in `$PGPORT` (Jorge's is `40875`; yours will differ — run `echo $PGPORT`).
-- It listens on `127.0.0.1` only, so it is unreachable from outside the server. That is a feature, and it is why we are not bothering with tunnels.
-- Its data directory is `$PGDATA`, under `/extra/<your-netid>/cs166`.
-- Plain `psql` will **not** work — it looks for a socket in `/var/run/postgresql`, but our instances put theirs in `/extra/<netid>/cs166/sockets`. Use the `cs166_psql` wrapper instead, which passes the right paths.
 
-### 1.3 — Find or create your database
-
-An "instance" (the running server process) is not the same thing as a "database" (a named collection of tables inside it). One instance holds many databases. List yours:
-
-```bash
-cs166_psql -d postgres -l
-```
-
-You are looking for a project database — Jorge's is `jcarb044_DB`. If you don't have one, create it:
-
-```bash
-cs166_createdb <your-netid>_DB
-```
-
-**Why:** The name you find here goes into `DB_NAME` in `.env` later. Copy it **exactly**, including capital letters — `jcarb044_DB` was created with quotes, so the capital `DB` is literal and `jcarb044_db` will not match.
-
-### 1.4 — Install uv
-
-[uv](https://docs.astral.sh/uv/) is our package manager. Install it into your own home directory:
-
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-~/.local/bin/uv python install 3.14
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
-source ~/.bashrc
-uv --version
-```
-
-**Why uv and not pip:** uv installs from a lockfile (`uv.lock`), so every one of us gets byte-identical package versions. No "works on my machine." It also needs no root access and downloads its own Python 3.14 rather than depending on whatever the server has — the server's system Python is old and we don't control it.
-
-**Why the PATH line:** The installer puts `uv` in `~/.local/bin`, which isn't searched by default. Adding it to `.bashrc` means plain `uv` works in every future shell instead of you typing the full path forever.
-
-### 1.5 — Set up GitHub access over SSH
-
-This is the fiddliest part. Three separate problems stack on top of each other, so it is worth understanding each one.
-
-**Problem 1: GitHub no longer accepts passwords for git.** Pushing over an `https://` remote fails with `Password authentication is not supported for Git operations`. The fix is either a personal access token or an SSH key. We use SSH keys — nothing to paste, nothing to expire.
-
-Generate a key pair on the server (press Enter at all three prompts to accept defaults and skip the passphrase):
-
-```bash
-ssh-keygen -t ed25519 -C "cs166-server"
-cat ~/.ssh/id_ed25519.pub
-```
-
-This creates two files. `~/.ssh/id_ed25519` is the **private** key — it stays on the server forever and you never share it. `~/.ssh/id_ed25519.pub` is the **public** key — it is safe to hand out, and it is the one `cat` just printed.
-
-Copy that whole printed line (it starts with `ssh-ed25519 AAAA...`) and add it to GitHub: avatar menu → **Settings** → **SSH and GPG keys** → **New SSH key** → give it a title like `cs166 school server`, leave type as *Authentication Key*, paste, **Add SSH key**.
-
-**Why key pairs work:** GitHub keeps your public key. When you push, your machine proves it holds the matching private key without ever transmitting it. Authentication by math instead of by secret-you-type.
-
-**Problem 2: the school blocks outbound port 22.** Ports are numbered doors; SSH normally uses 22. Campus networks routinely block outbound 22 so a compromised machine can't be used to attack other servers. The symptom is that `ssh -T git@github.com` just hangs until you Ctrl+C. GitHub runs a second SSH endpoint on port 443 — the port HTTPS uses, which no firewall blocks — so we point at that instead:
-
-```bash
-mkdir -p ~/.ssh
-printf 'Host github.com\n    Hostname ssh.github.com\n    Port 443\n    User git\n' >> ~/.ssh/config
-chmod 600 ~/.ssh/config
-```
-
-Same SSH protocol, same key, different door. Now test it:
-
-```bash
-ssh -T git@github.com
-```
-
-Expect `Hi <your-username>! You've successfully authenticated, but GitHub does not provide shell access.` That message is success — GitHub never gives you a shell. The first run will ask you to confirm a host fingerprint; type `yes`.
-
-**Problem 3: a GUI password popup on a machine with no GUI.** Git may try to launch `gnome-ssh-askpass` and fail with `cannot open display`. Prevent it:
-
-```bash
-echo 'unset SSH_ASKPASS' >> ~/.bashrc
-```
-
-### 1.6 — Clone the repository
-
-Clone into your **home directory**, not `/extra`:
-
-```bash
-cd ~
-git clone git@github.com:jorgencarbajal/cs166_ebay_project.git
-cd cs166_ebay_project
-```
-
-**Why home and not `/extra`:** `/extra` sits on the root filesystem, which is **100% full** with only a few GB left and shared with every other user. Home is on a separate 3.4 TB volume with plenty of room. Note that your `$PGDATA` is unavoidably on the full disk — if Postgres ever starts throwing write errors, that is why.
-
-**Why the `git@github.com:` form and not `https://`:** the SSH URL is what makes git use the key you just set up. If you cloned with HTTPS by mistake, fix it without re-cloning:
-
-```bash
-git remote set-url origin git@github.com:jorgencarbajal/cs166_ebay_project.git
-git remote -v      # confirm both lines now start with git@github.com
-```
-
-Set your identity so commits are attributed to you:
-
-```bash
-git config --global user.name "Your Name"
-git config --global user.email "your-github-email@example.com"
-```
-
-Use the email attached to your GitHub account, otherwise your commits won't link to your profile.
-
-### 1.7 — Install dependencies
-
-```bash
-uv sync
-```
-
-**What it does:** reads `pyproject.toml` and `uv.lock`, creates `.venv/` inside the project, and installs the exact pinned versions — psycopg 3, python-dotenv, rich, and their dependencies. Running it again is harmless; it just makes the venv match the lockfile.
-
-### 1.8 — Create your `.env`
-
-```bash
-cp .env.example .env
-```
-
-Then edit `.env` and fill in your values:
-
-```
-DB_HOST=localhost
-DB_PORT=<your $PGPORT — run: echo $PGPORT>
-DB_NAME=<your database from step 1.3, e.g. jcarb044_DB>
-DB_USER=<your netid>
-DB_PASSWORD=
-```
-
-`DB_PASSWORD` is intentionally left empty — the class instances use trust authentication. The variable must still be **present**, because the code reads it directly and will raise `KeyError` if it is missing.
-
-**Why `.env` at all:** every connection setting lives in this one file, and nothing is hardcoded. `.env` is gitignored so it never gets committed — which is what lets us each have different ports and database names while sharing identical code. `.env.example` is the committed template that tells you which settings exist; it holds no real values.
-
-**Why `DB_HOST=localhost` works here:** you are running the application on the same machine as Postgres, so `localhost` really is the database server. No tunnel, no forwarding, no port 5433.
-
-### 1.9 — Verify the connection
-
-```bash
-.venv/bin/python -c "from src import db; c = db.get_connection(); print(c.execute('SELECT version()').fetchone()); c.close()"
-```
-
-Success looks like:
-
-```
-{'version': 'PostgreSQL 10.23 on x86_64-redhat-linux-gnu, ...'}
-```
-
-If it fails, see [Troubleshooting](#troubleshooting).
-
-This one deliberately depends on nothing but `db.py`, which is why it is a raw one-liner and not a script — it is the check that still works when everything else is broken.
-
-### 1.10 — Build the database
-
-Your database exists but has no tables in it yet. Create them:
-
-```bash
-.venv/bin/python scripts/load_db.py
-```
-
-It prints the database it is about to target, lists the files it will run, and asks you to type `yes` before doing anything. Two other flags are available:
-
-```bash
-.venv/bin/python scripts/load_db.py --dry-run   # show the plan, touch nothing
-.venv/bin/python scripts/load_db.py --yes       # skip the prompt
-```
-
-Confirm it worked:
-
-```bash
-cs166_psql -d <your-netid>_DB -c '\dt'
-```
-
-You should see six tables — `users`, `item`, `auction`, `bid`, `payment`, `shipment`.
-
-**Read this before you run it a second time.** `scripts/load_db.py` is the only destructive file in the project: `sql/schema.sql` opens with six `DROP TABLE ... CASCADE` statements, so re-running it throws away every row you have. That is the point — it is how you get back to a clean database after testing corrupts your data — but it is not something to run casually. It only ever touches those six tables; anything else in your database is left alone.
-
-**Why it is a script and not part of the app:** `src/db.py` is imported by everything and only ever opens connections, so no stray import can drop a table. Everything destructive lives in `scripts/`, which is only ever run by hand.
-
----
-
-## Part 2 — Every session
-
-```bash
-ssh <your-netid>@cs166.cs.ucr.edu
-cs166_db_status                          # start it with cs166_db_start if it is down
-cd ~/cs166_ebay_project
-git pull
-.venv/bin/python main.py                 # run the application
-```
-
-That's it. There is no tunnel to open and nothing to leave running in a second terminal.
-
----
-
-## Development workflow
-
-Jorge edits on his own machine and runs on the server; you may do the same or edit directly over SSH. Either way, **git is how code moves** — never copy-paste files onto the server. Pasted files silently diverge from what is committed, and you will eventually spend an hour debugging code that isn't the code you think you are running.
-
-**Your server clone is yours alone.** We each have our own home directory, our own clone, and our own Postgres instance. Nothing is shared, so think of the server as simply a second machine of your own that happens to be the only one that can run the code.
-
----
-
-### Editing on the server (simpler)
-
-You SSH in, edit the files in place (`vim`, `nano`, or VS Code Remote-SSH), and run them right there. This is plain, ordinary git. There is nothing extra to learn.
-
-```bash
-# on the server, in ~/cs166_ebay_project
-git checkout main
-git pull                              # start from current main, not something stale
-git checkout -b feat/thing
-
-# ...edit files, then run them...
-.venv/bin/python main.py              # the application itself
-
-git commit -am "implement thing"
-git push -u origin feat/thing
-```
-
-Then open the pull request on GitHub, get a review, merge, and come back to a clean base:
-
-```bash
-git checkout main
-git pull
-```
-
-**Editing and running happen in the same place, so you never push just to test.** You push when the work is actually done.
-
----
-
-### Cleaning up
-
-Optional, but keeps `git branch -a` readable. GitHub offers a **Delete branch** button after merging, which removes the remote copy; the local ones are yours to remove:
-
-```bash
-git branch -d feat/thing     # in each clone you used — one for Workflow A, two for Workflow B
-git fetch --prune            # drop remote-tracking refs for branches that are gone
-```
-
-### Reading `git branch -a`
-
-```
-* main
-  remotes/origin/HEAD -> origin/main
-  remotes/origin/main
-```
-
-`origin/HEAD` is not a branch. It is a pointer recording which branch the remote treats as its default, which is how git knows what you mean if you write `origin` without naming a branch. Real branches are the lines without an arrow.
-
-### Branch rules
-
-Feature branches, pull requests into `main`, no direct pushes to `main`. Squash noisy `wip` commits with `git rebase -i` before opening the PR.
-
----
-
-### Two separations to keep in mind:
-
-- **Connecting vs. initializing.** `src/db.py` only opens connections and is imported everywhere, so importing it must never be able to drop a table. Anything destructive lives in `scripts/`.
-- **Creating the instance vs. creating tables.** Starting the Postgres instance is a manual, documented step (Part 1). Creating tables and loading data is repeatable and scripted.
-
-Schema and data live in `.sql` files, never in Python strings — those files are the source of truth if an instance is lost, and the Python is only a thin runner.
-
----
-
-## Dependencies
-
-Since the libraries are declared in `pyproject.toml`, all you have to do is `uv sync`. This is a command that syncs all the libraries into your uv environment.  
-
-- `psycopg[binary]` — Postgres driver
-- `rich` — terminal UI
-- `python-dotenv` — loads `.env`
-
-## Conventions/libraries
-
-- **psycopg 3**, imported as `psycopg` — *not* psycopg2. Row factories, connection strings, and transaction semantics all differ; do not paste psycopg2 snippets.
-- **rich** for terminal UI.
-- **Python 3.14**, pinned in `.python-version` and `requires-python`.
-- Dependencies via `uv add <package>` — never `pip`, never hand-edited.
-
-### Postgres 10.23
-
-The server runs **PostgreSQL 10.23**, released 2017. This is old, and it matters for the physical-design portion of the grade:
-
-- No covering indexes — `CREATE INDEX ... INCLUDE (...)` is PG 11+.
-- No `CALL` or stored procedures — functions only.
-- None of the PG 11+ planner improvements.
-
-Check syntax against the **PostgreSQL 10** documentation before proposing index or tuning work. Modern tutorials will hand you syntax that errors here.
-
----
-
-## Important notes
-
-Two decisions that change how you write code. Neither is visible from reading `sql/schema.sql`, and both will cost you an hour if you find them the hard way.
-
-### Primary keys — omit the id and use `RETURNING`
-
-Nothing in the instructor's schema auto-increments; every primary key is a plain `INT`. We fixed that ourselves in `sql/extensions.sql`, which adds one sequence per numeric-PK table and wires it in as the column `DEFAULT` — the same thing `SERIAL` does under the hood. So ids do generate themselves now, but only if you let them.
-
-Practical upshot for every `INSERT` you write: **leave the id column out, and get the new id back with `RETURNING`.**
-
-```sql
-INSERT INTO bid (auction_id, buyer_login, bid_amount) VALUES (%s, %s, %s) RETURNING bid_id
-```
-
-`users` is the exception — it has no sequence, because its primary key is the `login` string you already have in hand.
-
-### The dataset is ours, and it comes last
-
-**Resolved 2026-08-20:** we generate our own dataset rather than waiting on one from the instructor. It lives in `sql/seed.sql` and is deliberately being written **last**, once the features are built and we know what shape the data needs to be. It needs enough rows for the indexing work in issue #17 to show measurable improvement, and it will use predictable logins (`buyer1`, `seller1`, `admin1`) so nobody has to grep generated rows mid-demo. §2.3 requires dataset choices be reported, so this paragraph goes in the report.
-
-Data you create through the running application persists — `load_db.py` is run once, not once per session.
-
----
-
-## Team
-
-| Name | NetID | Responsibilities |
-|------|-------|------------------|
-|      |       |                  |
-|      |       |                  |
-|      |       |                  |
+4. Contributions
+Jorge: Code, repository
+Haripriya: Final project report
+Celina: Demo, final project report
