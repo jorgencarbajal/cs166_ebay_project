@@ -91,3 +91,4 @@ Active auctions by high bid:
 Jorge: Code, repository
 Haripriya: Final project report
 Celina: Demo, final project report
+
