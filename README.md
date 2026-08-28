@@ -59,36 +59,57 @@ User & Admin Operations (src/users.py & src/reports.py)
 - active_auctions(session): Admin-only, returns every open auction and its corresponding bidding activity
 
 3. Screenshots
+
+
 Browse open auctions:
-![Browse open auctions] (<Screenshot 2026-08-27 182244.png>)
+
+
+![Browse open auctions](Screenshot-1.png)
 
 
 View an auction in detail:
-![View an auction in detail] (<Screenshot 2026-08-27 182309.png>)
+
+
+![View an auction in detail](Screenshot-2.png)
 
 
 Closing one of your auctions:
-![Closing one of your auctions] (<Screenshot 2026-08-27 182701.png>)
+
+
+![Closing one of your auctions](Screenshot-3.png)
 
 
 Top bidders:
-![Top bidders] (<Screenshot 2026-08-27 182021-1.png>)
+
+
+![Top bidders](Screenshot-4.png)
 
 
 Revenue by category:
-![Revenue by category] (<Screenshot 2026-08-27 182146.png>)
+
+
+![Revenue by category](Screenshot-5.png)
 
 
 Won but unpaid:
-![Won but unpaid] (<Screenshot 2026-08-27 182200.png>)
+
+
+![Won but unpaid](Screenshot-6.png)
 
 
 Active auctions by high bid:
-![Active auctions by high bid] (<Screenshot 2026-08-27 182213.png>)
+
+
+![Active auctions by high bid](Screenshot-7.png)
 
 
 4. Contributions
-Jorge: Code, repository
-Haripriya: Final project report
-Celina: Demo, final project report
 
+
+Jorge: Code, repository
+
+
+Haripriya: Final project report
+
+
+Celina: Demo, final project report
